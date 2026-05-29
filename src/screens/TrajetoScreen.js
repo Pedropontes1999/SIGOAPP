@@ -116,11 +116,13 @@ export default function TrajetoScreen({ route, navigation }) {
   const [observacoesGerais, setObservacoesGerais] = useState('');
 
   // Pontos de trabalho lidos da coluna BC do Excel, ex: "2,5,8"
+  // Se a coluna não existir no Excel, cria um ponto de teste para demonstração
   const [pontosExecucao, setPontosExecucao] = useState(() => {
     const raw = obra?.['Ponto de Trabalho'] ?? '';
-    return raw
-      ? String(raw).split(',').map(p => ({ ponto: p.trim(), executado: '', restricao: '', responsabilidade: '', observacao: '' }))
-      : [];
+    if (raw) {
+      return String(raw).split(',').map(p => ({ ponto: p.trim(), executado: '', restricao: '', responsabilidade: '', observacao: '' }));
+    }
+    return [{ ponto: '1 (teste)', executado: '', restricao: '', responsabilidade: '', observacao: '' }];
   });
   const [restricaoPickerIdx, setRestricaoPickerIdx] = useState(null); // índice do ponto com picker aberto
   const [fotos, setFotos]                       = useState([null, null, null]); // URIs do AS BUILD
