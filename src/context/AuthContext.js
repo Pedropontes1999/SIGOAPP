@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { MOCK_USERS, findUserByName } from '../data/mockUsers';
-import { saveAuth, loadAuth, clearAuth, clearTrajetoSession } from '../storage/session';
+import { saveAuth, loadAuth, clearAuth, clearTrajetoSession, clearObrasList, clearCompletedObras } from '../storage/session';
 
 const AuthContext = createContext(null);
 
@@ -42,6 +42,8 @@ export function AuthProvider({ children }) {
   async function logout() {
     await clearAuth();
     await clearTrajetoSession();
+    await clearObrasList();
+    await clearCompletedObras();
     setUser(null);
   }
 

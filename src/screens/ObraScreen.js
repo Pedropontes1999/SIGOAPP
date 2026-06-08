@@ -13,17 +13,18 @@ export default function ObraScreen({ route, navigation }) {
   const { logout } = useAuth();
   const { colors } = useTheme();
   const { open: openSidebar } = useSidebar();
-  const arquivo = route?.params?.arquivo ?? null; // Excel/PDF da obra
-  const projeto = route?.params?.projeto ?? null; // PDF do projeto (opcional)
+  const arquivo = route?.params?.arquivo ?? null;
+  const projeto = route?.params?.projeto ?? null;
+  const obraParam = route?.params?.obra ?? null; // linha já parseada vinda do FormularioScreen
 
-  const [obra, setObra] = useState(null);   // dados da primeira linha do Excel
+  const [obra, setObra] = useState(obraParam ?? null);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState(null);
 
-  // Lê o arquivo assim que chegar via params
+  // Se obra já veio parseada não precisa reler o arquivo
   useEffect(() => {
-    if (arquivo) parseArquivo(arquivo);
-  }, [arquivo]);
+    if (!obraParam && arquivo) parseArquivo(arquivo);
+  }, [arquivo, obraParam]);
 
   // Lê Excel no web via FileReader ou no nativo via FileSystem + base64
   async function parseArquivo(arq) {

@@ -1,5 +1,7 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import * as XLSX from 'xlsx';
 import {
   View,
   Text,
@@ -12,17 +14,19 @@ import {
   Modal,
   Pressable,
   FlatList,
+  Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useSidebar } from '../context/SidebarContext';
-import { loadTrajetoSession, clearTrajetoSession } from '../storage/session';
+import { loadTrajetoSession, clearTrajetoSession, saveObrasList, loadObrasList, loadCompletedObras, clearCompletedObras } from '../storage/session';
+import { excelDateToStr, excelTimeToStr } from '../utils/excelDate';
 import { getPlaceholderMembers, getMembersByParceira } from '../data/mockMembers';
-import { useEffect } from 'react';
 
-// Quantidade de colaboradores por tipo de composição
 const COMPOSICAO_SIZE = { A3: 2, B1: 4, B2: 6, B3: 7, C1: 2, C2: 5, L3: 2 };
+
 
 export default function FormularioScreen({ navigation }) {
   const { user, logout } = useAuth();
@@ -30,7 +34,6 @@ export default function FormularioScreen({ navigation }) {
   const { open: openSidebar } = useSidebar();
   const [detailsCollapsed, setDetailsCollapsed] = useState(false);
 
-  // Se há sessão de trajeto ativa, redireciona direto para TrajetoScreen
   useEffect(() => {
     loadTrajetoSession().then(session => {
       if (session && session.stage && session.stage !== 'encerrado') {
@@ -45,20 +48,31 @@ export default function FormularioScreen({ navigation }) {
   const [arquivoSelecionado, setArquivoSelecionado] = useState(null);
   const [projetoSelecionado, setProjetoSelecionado] = useState(null);
 
-  // Tamanho da equipe: usa qtdColaboradores do usuário ou infere pela composição
+  // Seleção de arquivo Excel — Downloads + filtro por sigla
+  const [showDownloads, setShowDownloads] = useState(false);
+  const [downloadFiles, setDownloadFiles] = useState([]);
+  const [parseLoading, setParseLoading] = useState(false);
+  const [parseError, setParseError] = useState(null);
+  const [parsedObras, setParsedObras] = useState([]);
+  const [pendingAsset, setPendingAsset] = useState(null);
+  const [showObraSelect, setShowObraSelect] = useState(false);
+  const [selectedObra, setSelectedObra] = useState(null);
+
+  // Lista de obras já carregadas de uma sessão anterior (não precisa re-enviar Excel)
+  const [savedObrasList, setSavedObrasList] = useState([]);
+  const [completedObras, setCompletedObras] = useState([]); // OVNOTAs já concluídos
+
+  useEffect(() => {
+    loadObrasList().then(list => setSavedObrasList(list ?? []));
+    loadCompletedObras().then(list => setCompletedObras(list ?? []));
+  }, []);
+
   const teamSize = user?.qtdColaboradores ?? COMPOSICAO_SIZE[user?.composicao] ?? 1;
-
   const [liderVisible, setLiderVisible] = useState(true);
-
-  // Membros pré-preenchidos com base na sigla do usuário (vêm do mockMembers)
   const [teamMembers, setTeamMembers] = useState(() =>
     getPlaceholderMembers(user).map(label => ({ label, visible: true }))
   );
-
-  // Membros extras adicionados manualmente com autocomplete
   const [extras, setExtras] = useState([]);
-
-  // Todos os membros da parceira do usuário para sugerir no autocomplete
   const parceiraMembros = useMemo(
     () => getMembersByParceira(user?.parceira ?? ''),
     [user?.parceira]
@@ -67,11 +81,8 @@ export default function FormularioScreen({ navigation }) {
   const visiblePreset = teamMembers.filter(m => m.visible);
   const totalVisible =
     (liderVisible ? 1 : 0) + visiblePreset.length + extras.length;
-
-  // Botão confirmar só ativa quando todos os extras tiverem membro selecionado
   const allComplete = extras.every(e => e.selected != null);
 
-  // Esconde membro pré-preenchido (não remove, só oculta)
   function removeMember(index) {
     setTeamMembers(prev => prev.map((m, i) => i === index ? { ...m, visible: false } : m));
   }
@@ -80,14 +91,12 @@ export default function FormularioScreen({ navigation }) {
     setExtras(prev => [...prev, { id: Date.now(), query: '', selected: null, open: false }]);
   }
 
-  // Atualiza texto de busca e abre dropdown de sugestões
   function updateQuery(id, query) {
     setExtras(prev => prev.map(e =>
       e.id === id ? { ...e, query, selected: null, open: query.length > 0 } : e
     ));
   }
 
-  // Confirma membro selecionado no autocomplete e fecha dropdown
   function selectMember(id, member) {
     setExtras(prev => prev.map(e =>
       e.id === id ? { ...e, query: member, selected: member, open: false } : e
@@ -98,8 +107,40 @@ export default function FormularioScreen({ navigation }) {
     setExtras(prev => prev.filter(e => e.id !== id));
   }
 
-  // Abre seletor de arquivo Excel ou PDF para a obra
-  async function pickFile() {
+  // Lê pasta Downloads do Android e retorna lista de xlsx ordenada por mais recente
+  async function loadDownloadFiles() {
+    try {
+      const path = 'file:///storage/emulated/0/Download/';
+      const names = await FileSystem.readDirectoryAsync(path);
+      const xls = names.filter(n => /\.(xlsx|xls)$/i.test(n));
+      const infos = await Promise.all(
+        xls.map(async name => {
+          const uri = path + encodeURIComponent(name);
+          const info = await FileSystem.getInfoAsync(uri);
+          return { name, uri, mtime: info.modificationTime ?? 0 };
+        })
+      );
+      return infos.sort((a, b) => b.mtime - a.mtime).slice(0, 15);
+    } catch {
+      return [];
+    }
+  }
+
+  // Abre picker: no Android tenta mostrar Downloads primeiro; iOS/web vai direto ao sistema
+  async function openFilePicker() {
+    if (Platform.OS === 'android') {
+      const files = await loadDownloadFiles();
+      if (files.length > 0) {
+        setDownloadFiles(files);
+        setShowDownloads(true);
+        return;
+      }
+    }
+    await pickFromSystem();
+  }
+
+  // Abre seletor de arquivo do sistema operacional
+  async function pickFromSystem() {
     const result = await DocumentPicker.getDocumentAsync({
       type: [
         'application/vnd.ms-excel',
@@ -108,11 +149,87 @@ export default function FormularioScreen({ navigation }) {
       copyToCacheDirectory: true,
     });
     if (!result.canceled && result.assets?.length > 0) {
-      setArquivoSelecionado(result.assets[0]);
+      // Passa o asset completo para que o web possa usar asset.file (FileReader)
+      await processExcel(result.assets[0]);
     }
   }
 
-  // Abre seletor de PDF do projeto separado
+  // Lê o Excel, filtra linhas pela sigla do usuário (coluna SiglaWPA) e gerencia seleção
+  // asset: { uri, name, file? }  — file só existe no web (objeto File nativo)
+  async function processExcel(asset) {
+    const { uri, name, file } = asset ?? {};
+    setParseLoading(true);
+    setParseError(null);
+    setShowDownloads(false);
+    try {
+      let rows;
+
+      if (Platform.OS === 'web' && file) {
+        // Web: usa FileReader para ler o objeto File nativo
+        rows = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            try {
+              const data = new Uint8Array(e.target.result);
+              const wb = XLSX.read(data, { type: 'array' });
+              const ws = wb.Sheets[wb.SheetNames[0]];
+              resolve(XLSX.utils.sheet_to_json(ws, { defval: '' }));
+            } catch (err) { reject(err); }
+          };
+          reader.onerror = reject;
+          reader.readAsArrayBuffer(file);
+        });
+      } else {
+        // Nativo: lê via FileSystem; copia para cache se vier de storage externo
+        let readUri = uri;
+        if (uri.startsWith('file:///storage/emulated/0/')) {
+          const dest = FileSystem.cacheDirectory + name;
+          await FileSystem.copyAsync({ from: uri, to: dest });
+          readUri = dest;
+        }
+        const base64 = await FileSystem.readAsStringAsync(readUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const wb = XLSX.read(base64, { type: 'base64' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      }
+
+      const sigla = (user?.sigla ?? '').trim();
+      const filtered = rows.filter(
+        row => String(row['SiglaWPA'] ?? '').trim() === sigla
+      );
+
+      if (filtered.length === 0) {
+        setParseError(`Nenhuma obra encontrada para a sigla "${sigla}" neste arquivo.`);
+        setArquivoSelecionado(null);
+        setSelectedObra(null);
+        return;
+      }
+
+      // Persiste todas as obras da sigla; reseta concluídas pois é uma nova planilha
+      await saveObrasList(filtered);
+      await clearCompletedObras();
+      setCompletedObras([]);
+      setSavedObrasList(filtered);
+
+      const fileAsset = { uri, name };
+
+      if (filtered.length === 1) {
+        setArquivoSelecionado(fileAsset);
+        setSelectedObra(filtered[0]);
+      } else {
+        setPendingAsset(fileAsset);
+        setParsedObras(filtered);
+        setShowObraSelect(true);
+      }
+    } catch {
+      setParseError('Não foi possível ler o arquivo. Verifique o formato.');
+    } finally {
+      setParseLoading(false);
+    }
+  }
+
   async function pickProjeto() {
     const result = await DocumentPicker.getDocumentAsync({
       type: 'application/pdf',
@@ -123,13 +240,15 @@ export default function FormularioScreen({ navigation }) {
     }
   }
 
-  // Navega para ObraScreen passando o arquivo importado e o PDF do projeto
   function confirmarImportacao() {
     setShowImport(false);
-    navigation.navigate('Obra', { arquivo: arquivoSelecionado, projeto: projetoSelecionado });
+    navigation.navigate('Obra', {
+      arquivo: arquivoSelecionado,
+      projeto: projetoSelecionado,
+      obra: selectedObra,
+    });
   }
 
-  // Computa a posição numérica visível de cada slot na lista (líder + preset + extras)
   let posCounter = 0;
   const liderPos = liderVisible ? ++posCounter : null;
   const presetPositions = teamMembers.map(m => m.visible ? ++posCounter : null);
@@ -162,7 +281,6 @@ export default function FormularioScreen({ navigation }) {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Card de dados do usuário logado (somente leitura) */}
         <View style={[styles.card, { backgroundColor: colors.card }]}>
           <View style={styles.cardHeader}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>Dados</Text>
@@ -177,33 +295,20 @@ export default function FormularioScreen({ navigation }) {
             <>
               <ReadOnlyField label="Nome" value={user?.nome} />
               <View style={styles.row}>
-                <View style={styles.half}>
-                  <ReadOnlyField label="Sigla" value={user?.sigla} />
-                </View>
-                <View style={styles.half}>
-                  <ReadOnlyField label="Parceira" value={user?.parceira} />
-                </View>
+                <View style={styles.half}><ReadOnlyField label="Sigla" value={user?.sigla} /></View>
+                <View style={styles.half}><ReadOnlyField label="Parceira" value={user?.parceira} /></View>
               </View>
               <View style={styles.row}>
-                <View style={styles.half}>
-                  <ReadOnlyField label="Composição" value={user?.composicao} />
-                </View>
-                <View style={styles.half}>
-                  <ReadOnlyField label="Tipo de Equipe" value={user?.tipoEquipe} />
-                </View>
+                <View style={styles.half}><ReadOnlyField label="Composição" value={user?.composicao} /></View>
+                <View style={styles.half}><ReadOnlyField label="Tipo de Equipe" value={user?.tipoEquipe} /></View>
               </View>
               <View style={styles.row}>
-                <View style={styles.half}>
-                  <ReadOnlyField label="Placa do Veículo" value={user?.placa} />
-                </View>
-                <View style={styles.half}>
-                  <ReadOnlyField label="Tipo de Veículo" value={user?.tipoVeiculo} />
-                </View>
+                <View style={styles.half}><ReadOnlyField label="Placa do Veículo" value={user?.placa} /></View>
+                <View style={styles.half}><ReadOnlyField label="Tipo de Veículo" value={user?.tipoVeiculo} /></View>
               </View>
             </>
           )}
 
-          {/* Resumo compacto quando o card está recolhido */}
           {detailsCollapsed && (
             <Text style={[styles.collapsedSummary, { color: colors.textSub }]}>
               {user?.sigla} · {user?.parceira} · {user?.composicao} · {user?.placa}
@@ -211,13 +316,9 @@ export default function FormularioScreen({ navigation }) {
           )}
         </View>
 
-        {/* Card de montagem da equipe */}
         <View style={[styles.card, { marginTop: 12, backgroundColor: colors.card }]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>
-            Equipe ({totalVisible})
-          </Text>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Equipe ({totalVisible})</Text>
 
-          {/* Líder: sempre é o próprio usuário logado */}
           {liderVisible && (
             <View style={styles.memberRow}>
               <View style={[styles.memberBadge, { backgroundColor: '#16A34A' }]}>
@@ -232,7 +333,6 @@ export default function FormularioScreen({ navigation }) {
             </View>
           )}
 
-          {/* Membros pré-preenchidos (ocultar não remove, apenas esconde) */}
           {teamMembers.map((member, index) => {
             if (!member.visible) return null;
             const pos = presetPositions[index];
@@ -251,7 +351,6 @@ export default function FormularioScreen({ navigation }) {
             );
           })}
 
-          {/* Extras: campo de busca com autocomplete e dropdown de sugestões */}
           {extras.map((extra, i) => {
             const pos = extraPositions[i];
             const suggestions = extra.selected
@@ -259,7 +358,7 @@ export default function FormularioScreen({ navigation }) {
               : parceiraMembros.filter(m =>
                   extra.query.trim().length > 0 &&
                   m.toLowerCase().includes(extra.query.toLowerCase())
-                ).slice(0, 8); // limita sugestões a 8 itens
+                ).slice(0, 8);
 
             return (
               <View key={extra.id}>
@@ -302,7 +401,6 @@ export default function FormularioScreen({ navigation }) {
                   </View>
                 )}
 
-                {/* Mensagem quando a busca não retorna resultados */}
                 {extra.query.trim().length > 0 && !extra.selected && suggestions.length === 0 && (
                   <View style={[styles.dropdown, { backgroundColor: colors.card }]}>
                     <Text style={[styles.dropdownEmpty, { color: colors.textMuted }]}>
@@ -320,11 +418,25 @@ export default function FormularioScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* Confirmar equipe abre o modal de importação de arquivos */}
         <TouchableOpacity
           style={[styles.iniciarBtn, !allComplete && styles.iniciarBtnDisabled]}
           disabled={!allComplete}
-          onPress={() => { setArquivoSelecionado(null); setShowImport(true); }}
+          onPress={() => {
+            setArquivoSelecionado(null);
+            setSelectedObra(null);
+            setParseError(null);
+            if (savedObrasList.length > 0) {
+              // Recarrega concluídas fresquinho antes de abrir o modal
+              loadCompletedObras().then(done => {
+                setCompletedObras(done ?? []);
+                setParsedObras(savedObrasList);
+                setPendingAsset(null);
+                setShowObraSelect(true);
+              });
+            } else {
+              setShowImport(true);
+            }
+          }}
           activeOpacity={0.85}
         >
           <Text style={styles.iniciarBtnText}>Confirmar Equipe</Text>
@@ -333,9 +445,15 @@ export default function FormularioScreen({ navigation }) {
         {!allComplete && (
           <Text style={styles.hint}>Selecione um membro da lista para continuar</Text>
         )}
+
+        {allComplete && savedObrasList.length > 0 && (
+          <Text style={styles.hint}>
+            {savedObrasList.length} obra{savedObrasList.length > 1 ? 's' : ''} carregada{savedObrasList.length > 1 ? 's' : ''} do Excel anterior
+          </Text>
+        )}
       </ScrollView>
 
-      {/* Modal de importação: Excel/PDF da obra + PDF do projeto */}
+      {/* Modal principal de importação de arquivos */}
       <Modal
         visible={showImport}
         transparent
@@ -348,16 +466,52 @@ export default function FormularioScreen({ navigation }) {
 
             <Text style={styles.modalSectionLabel}>Nota / Ordem de Trabalho</Text>
             <Text style={styles.modalSub}>Excel com as obras do dia</Text>
-            <TouchableOpacity style={[styles.pickBtn, arquivoSelecionado && styles.pickBtnDone]} onPress={pickFile} activeOpacity={0.8}>
-              <Feather name="file-text" size={18} color={arquivoSelecionado ? '#16A34A' : '#6B7280'} />
+            <TouchableOpacity
+              style={[styles.pickBtn, arquivoSelecionado && !parseError && styles.pickBtnDone]}
+              onPress={openFilePicker}
+              disabled={parseLoading}
+              activeOpacity={0.8}
+            >
+              <Feather
+                name="file-text"
+                size={18}
+                color={arquivoSelecionado && !parseError ? '#16A34A' : '#6B7280'}
+              />
               <Text style={styles.pickBtnText} numberOfLines={1}>
-                {arquivoSelecionado ? arquivoSelecionado.name : 'Escolher arquivo'}
+                {parseLoading
+                  ? 'Processando...'
+                  : arquivoSelecionado
+                  ? arquivoSelecionado.name
+                  : 'Escolher arquivo'}
               </Text>
+              {parseLoading && <ActivityIndicator size="small" color="#1E3A5F" />}
             </TouchableOpacity>
+
+            {parseError ? (
+              <Text style={styles.parseErrorText}>{parseError}</Text>
+            ) : selectedObra ? (
+              <View style={styles.obraSelectedBadge}>
+                <Feather name="check-circle" size={13} color="#16A34A" />
+                <Text style={styles.obraSelectedText}>
+                  {'OV ' + (selectedObra['OVNOTA'] || '—')}
+                  {selectedObra['MUNICIPIO'] ? ' · ' + selectedObra['MUNICIPIO'] : ''}
+                  {'\n'}
+                  {excelDateToStr(selectedObra['DATAPROG'])}
+                  {'  '}
+                  {excelTimeToStr(selectedObra['HORAINI'])}
+                  {' – '}
+                  {excelTimeToStr(selectedObra['HORATER'])}
+                </Text>
+              </View>
+            ) : null}
 
             <Text style={[styles.modalSectionLabel, { marginTop: 14 }]}>Projeto (PDF)</Text>
             <Text style={styles.modalSub}>PDF do projeto da obra</Text>
-            <TouchableOpacity style={[styles.pickBtn, projetoSelecionado && styles.pickBtnDone]} onPress={pickProjeto} activeOpacity={0.8}>
+            <TouchableOpacity
+              style={[styles.pickBtn, projetoSelecionado && styles.pickBtnDone]}
+              onPress={pickProjeto}
+              activeOpacity={0.8}
+            >
               <Feather name="file" size={18} color={projetoSelecionado ? '#16A34A' : '#6B7280'} />
               <Text style={styles.pickBtnText} numberOfLines={1}>
                 {projetoSelecionado ? projetoSelecionado.name : 'Escolher PDF'}
@@ -368,11 +522,10 @@ export default function FormularioScreen({ navigation }) {
               <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowImport(false)} activeOpacity={0.8}>
                 <Text style={styles.cancelBtnText}>Cancelar</Text>
               </TouchableOpacity>
-              {/* Continuar exige ao menos o arquivo da obra */}
               <TouchableOpacity
-                style={[styles.continueBtn, !arquivoSelecionado && styles.continueBtnDisabled]}
+                style={[styles.continueBtn, (!arquivoSelecionado || !selectedObra || parseLoading) && styles.continueBtnDisabled]}
                 onPress={confirmarImportacao}
-                disabled={!arquivoSelecionado}
+                disabled={!arquivoSelecionado || !selectedObra || parseLoading}
                 activeOpacity={0.8}
               >
                 <Text style={styles.continueBtnText}>Continuar</Text>
@@ -381,11 +534,186 @@ export default function FormularioScreen({ navigation }) {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Modal de arquivos recentes do Downloads (Android) */}
+      <Modal
+        visible={showDownloads}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDownloads(false)}
+      >
+        <Pressable style={styles.downloadsOverlay} onPress={() => setShowDownloads(false)}>
+          <Pressable style={styles.downloadsCard} onPress={() => {}}>
+            <View style={styles.downloadsHandle} />
+            <Text style={styles.downloadsTitle}>Selecionar Planilha</Text>
+            <Text style={styles.downloadsSub}>Arquivos Excel encontrados em Downloads</Text>
+
+            <FlatList
+              data={downloadFiles}
+              keyExtractor={item => item.uri}
+              style={styles.dlList}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.dlItem}
+                  onPress={() => processExcel({ uri: item.uri, name: item.name })}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.dlIconBox}>
+                    <Feather name="file-text" size={20} color="#16A34A" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.dlName} numberOfLines={1}>{item.name}</Text>
+                    {item.mtime > 0 && (
+                      <Text style={styles.dlDate}>
+                        {new Date(item.mtime * 1000).toLocaleDateString('pt-BR')}
+                      </Text>
+                    )}
+                  </View>
+                  <Feather name="chevron-right" size={16} color="#9CA3AF" />
+                </TouchableOpacity>
+              )}
+              ItemSeparatorComponent={() => <View style={styles.dlSep} />}
+            />
+
+            {parseLoading && (
+              <View style={styles.dlLoadingRow}>
+                <ActivityIndicator size="small" color="#1E3A5F" />
+                <Text style={styles.dlLoadingText}>Lendo arquivo...</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.dlBrowseBtn}
+              onPress={async () => {
+                setShowDownloads(false);
+                await pickFromSystem();
+              }}
+              activeOpacity={0.8}
+            >
+              <Feather name="folder" size={16} color="#1E3A5F" />
+              <Text style={styles.dlBrowseBtnText}>Procurar outros arquivos</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dlCancelBtn}
+              onPress={() => setShowDownloads(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.dlCancelText}>Cancelar</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal de seleção de obra quando há múltiplas para a sigla do usuário */}
+      <Modal
+        visible={showObraSelect}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowObraSelect(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowObraSelect(false)}>
+          <Pressable style={[styles.modalCard, { maxHeight: '80%' }]} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Selecionar Obra</Text>
+            <Text style={[styles.modalSub, { textAlign: 'center', marginBottom: 14 }]}>
+              {parsedObras.length} obras encontradas para {user?.sigla}
+            </Text>
+
+            <FlatList
+              data={parsedObras}
+              keyExtractor={(item, i) => String(item['OVNOTA'] ?? i)}
+              renderItem={({ item }) => {
+                const isDone = completedObras.includes(String(item['OVNOTA'] ?? ''));
+                return (
+                  <TouchableOpacity
+                    style={[styles.obraItem, isDone && styles.obraItemDone]}
+                    onPress={() => {
+                      if (pendingAsset) {
+                        setSelectedObra(item);
+                        setArquivoSelecionado(pendingAsset);
+                        setPendingAsset(null);
+                        setShowObraSelect(false);
+                      } else {
+                        setShowObraSelect(false);
+                        navigation.navigate('Obra', { obra: item, projeto: null });
+                      }
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.obraItemHeader}>
+                      <Text style={[styles.obraOV, isDone && styles.obraOVDone]}>
+                        OV {item['OVNOTA'] || '—'}
+                      </Text>
+                      {isDone && (
+                        <View style={styles.obraDoneBadge}>
+                          <Feather name="check" size={11} color="#FFF" />
+                          <Text style={styles.obraDoneBadgeText}>Concluída</Text>
+                        </View>
+                      )}
+                    </View>
+                    {!!item['MUNICIPIO'] && (
+                      <Text style={[styles.obraMunicipio, isDone && { color: '#9CA3AF' }]}>
+                        {item['MUNICIPIO']}
+                      </Text>
+                    )}
+                    {!!item['REFERENCIA'] && (
+                      <Text style={[styles.obraRef, isDone && { color: '#9CA3AF' }]} numberOfLines={1}>
+                        {item['REFERENCIA']}
+                      </Text>
+                    )}
+                    <View style={styles.obraDateRow}>
+                      <Feather name="calendar" size={12} color={isDone ? '#9CA3AF' : '#6B7280'} />
+                      <Text style={[styles.obraDateTime, isDone && { color: '#9CA3AF' }]}>
+                        {excelDateToStr(item['DATAPROG'])}
+                      </Text>
+                      <Feather name="clock" size={12} color={isDone ? '#9CA3AF' : '#6B7280'} style={{ marginLeft: 8 }} />
+                      <Text style={[styles.obraDateTime, isDone && { color: '#9CA3AF' }]}>
+                        {excelTimeToStr(item['HORAINI'])} – {excelTimeToStr(item['HORATER'])}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }}
+              ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: '#F3F4F6' }} />}
+            />
+
+            {/* Quando vier da lista salva, oferece trocar o Excel */}
+            {!pendingAsset && (
+              <TouchableOpacity
+                style={styles.trocarExcelBtn}
+                onPress={() => {
+                  setShowObraSelect(false);
+                  setArquivoSelecionado(null);
+                  setSelectedObra(null);
+                  setParseError(null);
+                  setShowImport(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Feather name="upload" size={13} color="#1E3A5F" />
+                <Text style={styles.trocarExcelText}>Enviar outro Excel</Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={[styles.cancelBtn, { marginTop: 8 }]}
+              onPress={() => {
+                setShowObraSelect(false);
+                setPendingAsset(null);
+                setArquivoSelecionado(null);
+                setSelectedObra(null);
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.cancelBtnText}>Cancelar</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-// Campo somente leitura reutilizável para exibir dados do usuário
 function ReadOnlyField({ label, value }) {
   const { colors } = useTheme();
   return (
@@ -401,10 +729,7 @@ function ReadOnlyField({ label, value }) {
 const rf = StyleSheet.create({
   wrapper: { marginTop: 14 },
   label: { fontSize: 12, fontWeight: '600', marginBottom: 5 },
-  box: {
-    borderWidth: 1.5, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 11,
-  },
+  box: { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11 },
   value: { fontSize: 13, fontWeight: '400' },
 });
 
@@ -436,60 +761,41 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
   },
   cardHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    marginBottom: 2,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2,
   },
   cardTitle: { fontSize: 15, fontWeight: '700' },
   toggleText: { fontSize: 12, fontWeight: '600' },
   collapsedSummary: { fontSize: 12, marginTop: 8 },
   row: { flexDirection: 'row', gap: 10 },
   half: { flex: 1 },
-
   memberRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 8 },
   memberBadge: {
-    width: 26, height: 26, borderRadius: 13,
-    justifyContent: 'center', alignItems: 'center', flexShrink: 0,
+    width: 26, height: 26, borderRadius: 13, justifyContent: 'center', alignItems: 'center', flexShrink: 0,
   },
   memberBadgeText: { color: '#FFF', fontSize: 12, fontWeight: '800' },
-  memberBox: {
-    borderWidth: 1.5, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 10,
-  },
+  memberBox: { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
   memberSelf: { fontSize: 14, fontWeight: '700' },
   memberLabel: { fontSize: 13, fontWeight: '500' },
   minusBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: '#6B7280',
+    width: 36, height: 36, borderRadius: 10, backgroundColor: '#6B7280',
     justifyContent: 'center', alignItems: 'center', flexShrink: 0,
   },
-  subInput: {
-    borderWidth: 1.5, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 10, fontSize: 13,
-  },
-
+  subInput: { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 13 },
   dropdown: {
     marginLeft: 34, marginRight: 44, marginTop: 2,
     borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB',
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1, shadowRadius: 8, elevation: 6,
-    overflow: 'hidden',
+    shadowOpacity: 0.1, shadowRadius: 8, elevation: 6, overflow: 'hidden',
   },
-  dropdownItem: {
-    paddingHorizontal: 14, paddingVertical: 11,
-  },
+  dropdownItem: { paddingHorizontal: 14, paddingVertical: 11 },
   dropdownText: { fontSize: 13 },
-  dropdownEmpty: {
-    paddingHorizontal: 14, paddingVertical: 11, fontSize: 12, fontStyle: 'italic',
-  },
-
+  dropdownEmpty: { paddingHorizontal: 14, paddingVertical: 11, fontSize: 12, fontStyle: 'italic' },
   addExtraBtn: {
-    marginTop: 14, borderWidth: 1.5, borderColor: '#16A34A',
-    borderStyle: 'dashed', borderRadius: 12,
-    paddingVertical: 11, alignItems: 'center',
+    marginTop: 14, borderWidth: 1.5, borderColor: '#16A34A', borderStyle: 'dashed',
+    borderRadius: 12, paddingVertical: 11, alignItems: 'center',
     flexDirection: 'row', justifyContent: 'center', gap: 6,
   },
   addExtraBtnText: { color: '#16A34A', fontSize: 14, fontWeight: '700' },
-
   iniciarBtn: {
     backgroundColor: '#16A34A', borderRadius: 14, paddingVertical: 16,
     alignItems: 'center', marginTop: 20, elevation: 5,
@@ -498,6 +804,7 @@ const styles = StyleSheet.create({
   iniciarBtnText: { color: '#FFFFFF', fontSize: 17, fontWeight: '800', letterSpacing: 0.5 },
   hint: { textAlign: 'center', color: '#9CA3AF', fontSize: 12, marginTop: 8 },
 
+  // Modal overlay compartilhado
   modalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center', alignItems: 'center', padding: 24,
@@ -508,29 +815,96 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2, shadowRadius: 20, elevation: 10,
   },
   modalTitle: {
-    fontSize: 16, fontWeight: '800', color: '#1E3A5F',
-    textAlign: 'center', marginBottom: 8,
+    fontSize: 16, fontWeight: '800', color: '#1E3A5F', textAlign: 'center', marginBottom: 8,
   },
   modalSectionLabel: { fontSize: 13, fontWeight: '700', color: '#1E3A5F', marginBottom: 2 },
   modalSub: { fontSize: 12, color: '#6B7280', marginBottom: 8 },
   pickBtn: {
     borderWidth: 2, borderColor: '#E5E7EB', borderStyle: 'dashed',
     borderRadius: 12, paddingVertical: 14, paddingHorizontal: 12,
-    alignItems: 'center', flexDirection: 'row', gap: 8,
-    backgroundColor: '#F9FAFB',
+    alignItems: 'center', flexDirection: 'row', gap: 8, backgroundColor: '#F9FAFB',
   },
   pickBtnDone: { borderColor: '#16A34A', borderStyle: 'solid', backgroundColor: '#F0FDF4' },
   pickBtnText: { fontSize: 13, fontWeight: '600', color: '#374151', flex: 1 },
+  parseErrorText: { fontSize: 12, color: '#DC2626', marginTop: 6, marginLeft: 2 },
+  obraSelectedBadge: {
+    marginTop: 8, flexDirection: 'row', alignItems: 'flex-start', gap: 6,
+    backgroundColor: '#F0FDF4', borderRadius: 8, padding: 8, borderWidth: 1, borderColor: '#BBF7D0',
+  },
+  obraSelectedText: { fontSize: 12, color: '#15803D', flex: 1, lineHeight: 18 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 24 },
   cancelBtn: {
     flex: 1, paddingVertical: 13, borderRadius: 10,
     borderWidth: 1.5, borderColor: '#E5E7EB', alignItems: 'center',
   },
   cancelBtnText: { fontSize: 14, fontWeight: '600', color: '#6B7280' },
-  continueBtn: {
-    flex: 1, paddingVertical: 13, borderRadius: 10,
-    backgroundColor: '#1E3A5F', alignItems: 'center',
-  },
+  continueBtn: { flex: 1, paddingVertical: 13, borderRadius: 10, backgroundColor: '#1E3A5F', alignItems: 'center' },
   continueBtnDisabled: { backgroundColor: '#D1D5DB' },
   continueBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+
+  // Downloads modal (slide from bottom)
+  downloadsOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  downloadsCard: {
+    backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 20, paddingBottom: 32, paddingTop: 12,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12, shadowRadius: 12, elevation: 16,
+    maxHeight: '80%',
+  },
+  downloadsHandle: {
+    width: 40, height: 4, backgroundColor: '#D1D5DB',
+    borderRadius: 2, alignSelf: 'center', marginBottom: 14,
+  },
+  downloadsTitle: { fontSize: 16, fontWeight: '800', color: '#1E3A5F', marginBottom: 4 },
+  downloadsSub: { fontSize: 12, color: '#6B7280', marginBottom: 12 },
+  dlList: { maxHeight: 300 },
+  dlItem: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12,
+  },
+  dlIconBox: {
+    width: 40, height: 40, borderRadius: 10,
+    backgroundColor: '#F0FDF4', justifyContent: 'center', alignItems: 'center',
+  },
+  dlName: { fontSize: 14, fontWeight: '600', color: '#111827' },
+  dlDate: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
+  dlSep: { height: 1, backgroundColor: '#F3F4F6' },
+  dlLoadingRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 10, justifyContent: 'center',
+  },
+  dlLoadingText: { fontSize: 13, color: '#6B7280' },
+  dlBrowseBtn: {
+    marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, paddingVertical: 13, borderRadius: 12,
+    borderWidth: 1.5, borderColor: '#1E3A5F',
+  },
+  dlBrowseBtnText: { fontSize: 14, fontWeight: '700', color: '#1E3A5F' },
+  dlCancelBtn: { marginTop: 10, paddingVertical: 13, alignItems: 'center' },
+  dlCancelText: { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },
+
+  // Obra selection modal items
+  trocarExcelBtn: {
+    marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: 11, borderRadius: 10,
+    borderWidth: 1.5, borderColor: '#1E3A5F', borderStyle: 'dashed',
+  },
+  trocarExcelText: { fontSize: 13, fontWeight: '600', color: '#1E3A5F' },
+  obraItem: { paddingVertical: 14, paddingHorizontal: 4 },
+  obraItemDone: { opacity: 0.7 },
+  obraItemHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
+  obraOV: { fontSize: 15, fontWeight: '800', color: '#1E3A5F' },
+  obraOVDone: { color: '#9CA3AF' },
+  obraDoneBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: '#16A34A', borderRadius: 20,
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  obraDoneBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF' },
+  obraMunicipio: { fontSize: 13, color: '#374151', marginBottom: 1 },
+  obraRef: { fontSize: 12, color: '#6B7280', marginBottom: 4 },
+  obraDateRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  obraDateTime: { fontSize: 12, color: '#374151', fontWeight: '500' },
 });

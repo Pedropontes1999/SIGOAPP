@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
   SafeAreaView, StatusBar, ScrollView, Image, Alert, Platform,
-  Modal, TextInput, KeyboardAvoidingView,
+  Modal, TextInput, KeyboardAvoidingView, FlatList, Pressable,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
@@ -16,7 +16,8 @@ import FichaMedicaoAterramentoModal from '../components/FichaMedicaoAterramentoM
 import FichaEquipamentoModal from '../components/FichaEquipamentoModal';
 import DPModal from '../components/DPModal';
 import PDFViewerModal from '../components/PDFViewerModal';
-import { saveTrajetoSession, loadTrajetoSession, clearTrajetoSession } from '../storage/session';
+import { saveTrajetoSession, loadTrajetoSession, clearTrajetoSession, loadObrasList, saveCompletedObra } from '../storage/session';
+import { excelDateToStr, excelTimeToStr } from '../utils/excelDate';
 import { saveReport } from '../storage/reports';
 import { buildWorkbook } from '../storage/buildWorkbook';
 import { useTheme } from '../context/ThemeContext';
@@ -139,6 +140,10 @@ export default function TrajetoScreen({ route, navigation }) {
   const [eventosLocalizacao, setEventosLocalizacao] = useState([]); // log de eventos com GPS
   const timerRef = useRef(null); // referência do setInterval do timer
 
+  // ── PRÓXIMA OBRA ──────────────────────────────────────────────────────────
+  const [obrasList, setObrasList] = useState([]);
+  const [showNextObra, setShowNextObra] = useState(false);
+
   // ── TIMER ── recalcula elapsed a partir do timestamp absoluto a cada segundo
   useEffect(() => {
     const active = stage === 'deslocando' || stage === 'atividade' || stage === 'deslocamento_volta';
@@ -151,6 +156,11 @@ export default function TrajetoScreen({ route, navigation }) {
     }
     return () => clearInterval(timerRef.current);
   }, [stage, phaseStartedAt]);
+
+  // Carrega lista de obras do dia para o fluxo "Próxima Obra"
+  useEffect(() => {
+    loadObrasList().then(list => setObrasList(list ?? []));
+  }, []);
 
   // ── RESTAURAR SESSÃO ── ao montar, tenta retomar de onde parou (strings ISO → Date)
   useEffect(() => {
@@ -190,6 +200,8 @@ export default function TrajetoScreen({ route, navigation }) {
     if (!sessionLoaded) return;
     if (stage === 'encerrado') {
       clearTrajetoSession();
+      // Marca a obra atual como concluída para exibir o check na lista
+      if (obra?.['OVNOTA']) saveCompletedObra(obra['OVNOTA']);
       return;
     }
     saveTrajetoSession({
@@ -417,6 +429,8 @@ export default function TrajetoScreen({ route, navigation }) {
           UTI: 'com.microsoft.excel.xlsx',
         });
       }
+      // Marca a obra como concluída independentemente do caminho (encerrarDia ou gerarRelatorio)
+      if (obra?.['OVNOTA']) await saveCompletedObra(obra['OVNOTA']);
       await clearTrajetoSession();
       navigation.reset({ index: 0, routes: [{ name: 'Formulario' }] });
     } catch (e) {
@@ -945,16 +959,31 @@ export default function TrajetoScreen({ route, navigation }) {
         )}
 
         {/* ── DIA ENCERRADO ── */}
-        {stage === 'encerrado' && (
-          <View style={[styles.concluidoBox, { backgroundColor: colors.concluidoBox }]}>
-            <Text style={styles.concluidoIcon}>🏁</Text>
-            <Text style={[styles.concluidoTitulo, { color: colors.cardDoneLeft }]}>Dia Encerrado</Text>
-            <Text style={[styles.concluidoSub, { color: colors.textSub }]}>Obrigado pelo trabalho de hoje!</Text>
-            <TouchableOpacity style={styles.btnRelatorio} onPress={gerarRelatorio} activeOpacity={0.85}>
-              <Text style={styles.btnText}>Gerar Relatório Excel</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        {stage === 'encerrado' && (() => {
+          const obraAtualOV = String(obra?.['OVNOTA'] ?? '');
+          const remaining = obrasList.filter(o => String(o['OVNOTA'] ?? '') !== obraAtualOV);
+          return (
+            <View style={[styles.concluidoBox, { backgroundColor: colors.concluidoBox }]}>
+              <Text style={styles.concluidoIcon}>🏁</Text>
+              <Text style={[styles.concluidoTitulo, { color: colors.cardDoneLeft }]}>Dia Encerrado</Text>
+              <Text style={[styles.concluidoSub, { color: colors.textSub }]}>Obrigado pelo trabalho de hoje!</Text>
+              <TouchableOpacity style={styles.btnRelatorio} onPress={gerarRelatorio} activeOpacity={0.85}>
+                <Text style={styles.btnText}>Gerar Relatório Excel</Text>
+              </TouchableOpacity>
+              {remaining.length > 0 && (
+                <TouchableOpacity
+                  style={styles.btnProximaObra}
+                  onPress={() => setShowNextObra(true)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.btnProximaObraText}>
+                    Próxima Obra ({remaining.length} restante{remaining.length > 1 ? 's' : ''})
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        })()}
 
       </ScrollView>
 
@@ -1101,6 +1130,64 @@ export default function TrajetoScreen({ route, navigation }) {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* ── MODAL PRÓXIMA OBRA ── */}
+      <Modal
+        visible={showNextObra}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowNextObra(false)}
+      >
+        <Pressable style={styles.nextObraOverlay} onPress={() => setShowNextObra(false)}>
+          <Pressable style={styles.nextObraCard} onPress={() => {}}>
+            <Text style={styles.nextObraTitulo}>Próxima Obra</Text>
+            <Text style={styles.nextObraSub}>Selecione a obra para iniciar</Text>
+
+            <FlatList
+              data={obrasList.filter(o => String(o['OVNOTA'] ?? '') !== String(obra?.['OVNOTA'] ?? ''))}
+              keyExtractor={(item, i) => String(item['OVNOTA'] ?? i)}
+              style={{ maxHeight: 400 }}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.nextObraItem}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setShowNextObra(false);
+                    navigation.replace('Obra', {
+                      obra: item,
+                      projeto: route?.params?.projeto ?? null,
+                    });
+                  }}
+                >
+                  <Text style={styles.nextObraOV}>OV {item['OVNOTA'] || '—'}</Text>
+                  {!!item['MUNICIPIO'] && (
+                    <Text style={styles.nextObraMunicipio}>{item['MUNICIPIO']}</Text>
+                  )}
+                  {!!item['REFERENCIA'] && (
+                    <Text style={styles.nextObraRef} numberOfLines={1}>{item['REFERENCIA']}</Text>
+                  )}
+                  <View style={styles.nextObraDateRow}>
+                    <Text style={styles.nextObraDateTime}>
+                      {excelDateToStr(item['DATAPROG'])}
+                      {'  '}
+                      {excelTimeToStr(item['HORAINI'])} – {excelTimeToStr(item['HORATER'])}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+              ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: '#F3F4F6' }} />}
+            />
+
+            <TouchableOpacity
+              style={styles.nextObraCancelBtn}
+              onPress={() => setShowNextObra(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.nextObraCancelText}>Cancelar</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
       </Modal>
 
     </SafeAreaView>
@@ -1372,6 +1459,41 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E3A5F', borderRadius: 12, paddingVertical: 14,
     alignItems: 'center', marginTop: 8, alignSelf: 'stretch',
   },
+  btnProximaObra: {
+    backgroundColor: '#16A34A', borderRadius: 12, paddingVertical: 14,
+    alignItems: 'center', alignSelf: 'stretch', marginTop: 4,
+  },
+  btnProximaObraText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
+
+  // Modal próxima obra
+  nextObraOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center', padding: 24,
+  },
+  nextObraCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 20, padding: 24,
+    width: '100%', maxHeight: '80%',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2, shadowRadius: 20, elevation: 10,
+  },
+  nextObraTitulo: {
+    fontSize: 16, fontWeight: '800', color: '#1E3A5F',
+    textAlign: 'center', marginBottom: 4,
+  },
+  nextObraSub: {
+    fontSize: 12, color: '#6B7280', textAlign: 'center', marginBottom: 16,
+  },
+  nextObraItem: { paddingVertical: 14, paddingHorizontal: 4 },
+  nextObraOV: { fontSize: 15, fontWeight: '800', color: '#1E3A5F', marginBottom: 2 },
+  nextObraMunicipio: { fontSize: 13, color: '#374151', marginBottom: 1 },
+  nextObraRef: { fontSize: 12, color: '#6B7280', marginBottom: 4 },
+  nextObraDateRow: { marginTop: 4 },
+  nextObraDateTime: { fontSize: 12, color: '#374151', fontWeight: '500' },
+  nextObraCancelBtn: {
+    marginTop: 16, paddingVertical: 13, borderRadius: 10,
+    borderWidth: 1.5, borderColor: '#E5E7EB', alignItems: 'center',
+  },
+  nextObraCancelText: { fontSize: 14, fontWeight: '600', color: '#6B7280' },
 
   atividadeRow: { flexDirection: 'row', gap: 10 },
   btnPausa: {
