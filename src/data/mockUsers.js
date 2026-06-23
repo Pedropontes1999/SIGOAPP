@@ -129,12 +129,20 @@ export const MOCK_USERS = {
   EMCAR02: { password: '1234', role: 'tercerizado', nome: 'Rodrigo',       sigla: 'EMCAR02', parceira: 'COMPEL', composicao: 'L3', tipoEquipe: 'BTZERO',     placa: 'KXA-6G58', tipoVeiculo: 'Cesto Aéreo', qtdColaboradores: 2 },
   EMCAR03: { password: '1234', role: 'tercerizado', nome: 'Kauan',         sigla: 'EMCAR03', parceira: 'COMPEL', composicao: 'L3', tipoEquipe: 'BTZERO',     placa: 'SSB9J77',  tipoVeiculo: 'Cesto Aéreo', qtdColaboradores: 2 },
 
-  // ── Internos ────────────────────────────────────────────
-  SIGO01: { password: '1234', role: 'interno', nome: 'Carlos Mendes',   sigla: 'SIGO01' },
-  SIGO02: { password: '1234', role: 'interno', nome: 'Patricia Lima',   sigla: 'SIGO02' },
-  SIGO03: { password: '1234', role: 'interno', nome: 'Roberto Silva',   sigla: 'SIGO03' },
-  SIGO04: { password: '1234', role: 'interno', nome: 'Ana Beatriz',     sigla: 'SIGO04' },
-  SIGO05: { password: '1234', role: 'interno', nome: 'Fernando Costa',  sigla: 'SIGO05' },
+  // ── Internos (colaboradores EDP) — sigla = matrícula ────
+  '6362':   { password: '1234', role: 'interno', nome: 'Ana Paula Simões de Oliveira',     sigla: '6362',   email: 'anapaula.oliveira@edp.com' },
+  '4767':   { password: '1234', role: 'interno', nome: 'Cristovao Pereira Pardim',         sigla: '4767',   email: 'cristovao.pardim@edp.com' },
+  '708957': { password: '1234', role: 'interno', nome: 'Daniel Carvalho de Souza',         sigla: '708957', email: 'danielcarvalho.souza@edp.com' },
+  '6066':   { password: '1234', role: 'interno', nome: 'Diego Melegari',                   sigla: '6066',   email: 'diego.melegari@edp.com' },
+  '6364':   { password: '1234', role: 'interno', nome: 'Fabiano Vittoretti Pereira',       sigla: '6364',   email: 'fabiano.pereira@edp.com' },
+  '702370': { password: '1234', role: 'interno', nome: 'Janiele do Nascimento Oliveira',   sigla: '702370', email: 'janiele.oliveira01@edp.com' },
+  '702626': { password: '1234', role: 'interno', nome: 'Juliana Escobar Viacava',          sigla: '702626', email: 'juliana.viacava@edp.com' },
+  '7100':   { password: '1234', role: 'interno', nome: 'Leandro Guilherme da Silva',       sigla: '7100',   email: 'leandro.silva@edp.com' },
+  '7188':   { password: '1234', role: 'interno', nome: 'Luana Roberta de Lima Costa Jesus', sigla: '7188',  email: 'luana.jesus@edp.com' },
+  '6331':   { password: '1234', role: 'interno', nome: 'Luiz Filipe Marques dos Santos',   sigla: '6331',   email: 'luiz.marques@edp.com' },
+  '7013':   { password: '1234', role: 'interno', nome: 'Marcio dos Santos Araujo',         sigla: '7013',   email: 'marcio.araujo@edp.com' },
+  '3635':   { password: '1234', role: 'interno', nome: 'Paulo Jorge Tavares de Lima',      sigla: '3635',   email: 'paulo.tavares@edp.com' },
+  '6340':   { password: '1234', role: 'interno', nome: 'Thiago Augusto de Souza Pereira',  sigla: '6340',   email: 'thiago.pereira@edp.com' },
 };
 
 // Busca por nome do líder (case-insensitive) — parceira é derivada do cadastro

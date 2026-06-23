@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useSidebar } from '../context/SidebarContext';
 import { MOCK_USERS } from '../data/mockUsers';
+import { excelDateToStr, excelTimeToStr } from '../utils/excelDate';
 
 const PARCEIRAS = [...new Set(
   Object.values(MOCK_USERS)
@@ -22,7 +23,10 @@ export default function FiscalizacaoScreen({ route, navigation }) {
   const { user } = useAuth();
   const { colors } = useTheme();
   const { open: openSidebar } = useSidebar();
-  const equipes = route?.params?.equipes ?? [];
+  // Fluxo interno passa uma única equipe (route.params.equipe); fallback para lista
+  const equipeUnica = route?.params?.equipe ?? null;
+  const equipes = equipeUnica ? [equipeUnica] : (route?.params?.equipes ?? []);
+  const obras = equipeUnica?.obras ?? [];
 
   // Se todas as equipes são da mesma parceira, pré-seleciona automaticamente
   const parceiraComum = equipes.length > 0 && equipes.every(e => e.parceira === equipes[0].parceira)
@@ -49,10 +53,11 @@ export default function FiscalizacaoScreen({ route, navigation }) {
       Alert.alert('Atenção', 'Preencha todos os campos obrigatórios (*).');
       return;
     }
-    const siglas = equipes.map(e => e.sigla).join(', ') || '—';
-    Alert.alert('Enviado!', `Inspeção registrada para: ${siglas}`, [
-      { text: 'OK', onPress: () => navigation.goBack() },
-    ]);
+    // Navega direto (no React Native Web os callbacks de botão do Alert não disparam)
+    // Fluxo interno: marca esta equipe como concluída na lista e volta (goBack
+    // preserva a instância da lista com suas equipes). Callback vindo via params.
+    route?.params?.onConcluir?.();
+    navigation.goBack();
   }
 
   return (
@@ -93,6 +98,25 @@ export default function FiscalizacaoScreen({ route, navigation }) {
               <Text style={[styles.equipesBadgeSiglas, { color: colors.heading }]}>
                 {equipes.map(e => e.sigla).join(' · ')}
               </Text>
+            </View>
+          )}
+
+          {/* Dados do Excel — obras desta equipe (fluxo interno) */}
+          {equipeUnica && obras.length > 0 && (
+            <View style={[styles.obrasBox, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
+              <Text style={[styles.obrasTitle, { color: colors.heading }]}>
+                Obras no Excel · {obras.length}
+              </Text>
+              {obras.map((o, i) => (
+                <View key={i} style={[styles.obraLinha, i < obras.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
+                  <Text style={[styles.obraOv, { color: colors.heading }]}>OV {o['OVNOTA'] || '—'}</Text>
+                  {!!o['MUNICIPIO'] && <Text style={[styles.obraInfo, { color: colors.text }]}>{o['MUNICIPIO']}</Text>}
+                  {!!o['REFERENCIA'] && <Text style={[styles.obraInfo, { color: colors.textMuted }]} numberOfLines={1}>{o['REFERENCIA']}</Text>}
+                  <Text style={[styles.obraInfo, { color: colors.textMuted }]}>
+                    {excelDateToStr(o['DATAPROG'])} · {excelTimeToStr(o['HORAINI'])} – {excelTimeToStr(o['HORATER'])}
+                  </Text>
+                </View>
+              ))}
             </View>
           )}
 
@@ -293,6 +317,12 @@ const styles = StyleSheet.create({
   equipesBadge: { borderRadius: 10, padding: 12, marginTop: 4 },
   equipesBadgeLabel: { fontSize: 11, fontWeight: '700', marginBottom: 4 },
   equipesBadgeSiglas: { fontSize: 13, fontWeight: '600' },
+
+  obrasBox: { borderRadius: 10, borderWidth: 1, padding: 12, marginTop: 12 },
+  obrasTitle: { fontSize: 12, fontWeight: '800', marginBottom: 6 },
+  obraLinha: { paddingVertical: 8 },
+  obraOv: { fontSize: 13, fontWeight: '800' },
+  obraInfo: { fontSize: 12, marginTop: 1 },
 
   field: { marginTop: 20 },
   fieldLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8 },

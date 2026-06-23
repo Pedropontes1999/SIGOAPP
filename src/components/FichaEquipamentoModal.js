@@ -1,26 +1,52 @@
 import React, { useState } from 'react';
 import {
   Modal, View, Text, TouchableOpacity, StyleSheet,
-  ScrollView, TextInput, Image, Alert, Platform, SafeAreaView,
+  ScrollView, TextInput, SafeAreaView,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useSidebar } from '../context/SidebarContext';
 
-// Fases usadas na grade de tensão do transformador
-const FASES_TENSAO = ['NA', 'NB', 'NC', 'AB', 'AC', 'BC'];
+// Tipos de equipamento e seus prefixos de instalação (replicado do Sigo)
+const EQUIPMENTS = ['Banco capacitor', 'Transformador', 'Religador', 'Regulador de tensão'];
 
-// Retorna estrutura vazia para um novo ponto de equipamento
-const novoPonto = () => ({
-  numero: '',
+const PREFIXES = {
+  Transformador: 'ET',
+  'Banco capacitor': 'BC',
+  'Regulador de tensão': 'RV',
+  Religador: 'RE',
+};
+
+// Opções de potência por tipo de equipamento (replicado do Sigo)
+const POWER_OPTIONS = {
+  'Banco capacitor': ['300', '600', '1200'],
+  Transformador: ['1,5', '5', '10', '15', '25', '30', '45', '50', '75', '100', '112.5', '150', '225', '300', '500'],
+  Religador: ['0'],
+  'Regulador de tensão': ['167', '333'],
+};
+
+// Marcas para equipamentos do tipo CS
+const CS_BRANDS = ['Landis Gyr', 'Eletra', 'Nansen'];
+
+// Estrutura de um ponto — sem dados fixos, equipamentos entram via "Adicionar"
+const novoPonto = (numero = '') => ({
+  numero: String(numero),
   possuiAplicados: 'Não',
-  instalado: { potencia: '', patrimonio: '', faseInstalacao: '', serie: '', marca: '', anoFabricacao: '', nInstalacao: '' },
-  tensoes: { NA: '', NB: '', NC: '', AB: '', AC: '', BC: '' },
-  fotosInstalado: [null, null],
+  aplicados: [],
   possuiRemovidos: 'Não',
-  retirado: { potencia: '', patrimonio: '', serie: '', marca: '', anoFabricacao: '', nInstalacao: '' },
-  fotosRetirado: [null, null],
+  removidos: [],
 });
+
+// Estrutura de um equipamento (DEFAULT ou CS, igual ao Sigo)
+const novoEquip = (type = 'DEFAULT') => ({
+  equipment: '', power: '', patrimony: '', installation: '', type,
+});
+
+// Valor exibido para "Número de Instalação" — prefixa conforme o equipamento
+function installationDisplay(eq) {
+  const pfx = PREFIXES[eq.equipment];
+  if (pfx) return eq.installation?.startsWith(pfx) ? eq.installation : pfx + (eq.installation || '');
+  return eq.installation;
+}
 
 function SimNao({ value, onChange }) {
   const { colors } = useTheme();
@@ -50,54 +76,209 @@ function InfoRow({ label, value }) {
   );
 }
 
-// Modal de Ficha de Equipamento — registra transformadores instalados e retirados por ponto
-export default function FichaEquipamentoModal({ visible, onClose, onConcluir, obra }) {
+// Dropdown reutilizável (substitui o <Select> do Sigo no React Native)
+function Dropdown({ value, options, onSelect, placeholder }) {
+  const { colors } = useTheme();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <TouchableOpacity
+        style={[s.input, s.dropdown, { backgroundColor: colors.inputBg, borderColor: colors.border }]}
+        onPress={() => setOpen(true)}
+        activeOpacity={0.8}
+      >
+        <Text style={{ color: value ? colors.inputText : colors.textMuted, fontSize: 13 }} numberOfLines={1}>
+          {value || placeholder}
+        </Text>
+        <Text style={{ color: colors.textMuted, fontSize: 11 }}>▼</Text>
+      </TouchableOpacity>
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <TouchableOpacity style={s.ddOverlay} activeOpacity={1} onPress={() => setOpen(false)}>
+          <View style={[s.ddCard, { backgroundColor: colors.card }]}>
+            <ScrollView>
+              {options.length === 0 && (
+                <Text style={[s.ddEmpty, { color: colors.textMuted }]}>
+                  Selecione o equipamento primeiro
+                </Text>
+              )}
+              {options.map(opt => (
+                <TouchableOpacity
+                  key={opt}
+                  style={[s.ddItem, { borderBottomColor: colors.border }]}
+                  onPress={() => { onSelect(opt); setOpen(false); }}
+                >
+                  <Text style={[s.ddItemText, { color: colors.text }, value === opt && { color: colors.heading, fontWeight: '800' }]}>
+                    {opt}
+                  </Text>
+                  {value === opt && <Text style={{ color: colors.heading, fontWeight: '800' }}>✓</Text>}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </>
+  );
+}
+
+// Modal de Ficha de Equipamento — registra equipamentos aplicados/removidos por ponto (padrão Sigo)
+export default function FichaEquipamentoModal({ visible, onClose, onConcluir, obra, pontosProgramados = [] }) {
   const { colors } = useTheme();
   const { open: openSidebar } = useSidebar();
-  const [pontos, setPontos] = useState([novoPonto()]);
+  const [pontos, setPontos] = useState([]);
+  const [showPicker, setShowPicker] = useState(false);
   const [colaboradorEDP, setColaboradorEDP] = useState('');
   const [colaboradorParceira, setColaboradorParceira] = useState('');
 
-  // Atualiza um campo de topo do ponto (numero, possuiAplicados, possuiRemovidos…)
+  // Pontos programados do Excel ainda não adicionados
+  const numerosJaAdicionados = pontos.map(p => p.numero);
+  const pontosDisponiveis = pontosProgramados.filter(p => !numerosJaAdicionados.includes(String(p)));
+
+  function adicionarPonto(numero) {
+    setPontos(p => [...p, novoPonto(numero)]);
+    setShowPicker(false);
+  }
+
   function updatePonto(idx, field, value) {
     setPontos(prev => prev.map((p, i) => i === idx ? { ...p, [field]: value } : p));
   }
-  // Atualiza um campo dentro de uma sub-seção do ponto (instalado, retirado, tensoes)
-  function updateSub(idx, secao, field, value) {
-    setPontos(prev => prev.map((p, i) => {
-      if (i !== idx) return p;
-      return { ...p, [secao]: { ...p[secao], [field]: value } };
-    }));
-  }
 
-  // Abre galeria e salva URI na posição correta do array de fotos do ponto
-  async function anexarFoto(pontoIdx, campo, fotoIdx) {
-    if (Platform.OS !== 'web') {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') { Alert.alert('Permissão necessária', 'Autorize o acesso à galeria.'); return; }
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.7 });
-    if (!result.canceled && result.assets?.length > 0) {
-      setPontos(prev => prev.map((p, i) => {
-        if (i !== pontoIdx) return p;
-        const f = [...p[campo]]; f[fotoIdx] = result.assets[0].uri;
-        return { ...p, [campo]: f };
-      }));
-    }
-  }
-  // Remove foto de um slot específico (seta null, mantém os outros slots)
-  function removerFoto(pontoIdx, campo, fotoIdx) {
+  // ── Equipamentos (lista = 'aplicados' | 'removidos') ──
+  function updateEquip(pontoIdx, lista, equipIdx, field, value) {
     setPontos(prev => prev.map((p, i) => {
       if (i !== pontoIdx) return p;
-      const f = [...p[campo]]; f[fotoIdx] = null;
-      return { ...p, [campo]: f };
+      const arr = [...p[lista]];
+      arr[equipIdx] = { ...arr[equipIdx], [field]: value };
+      return { ...p, [lista]: arr };
     }));
   }
 
-  // Entrega dados ao TrajetoScreen e fecha o modal
+  // Seleciona o equipamento e zera a potência (as opções dependem do tipo)
+  function selecionarEquipamento(pontoIdx, lista, equipIdx, value) {
+    setPontos(prev => prev.map((p, i) => {
+      if (i !== pontoIdx) return p;
+      const arr = [...p[lista]];
+      arr[equipIdx] = { ...arr[equipIdx], equipment: value, power: '' };
+      return { ...p, [lista]: arr };
+    }));
+  }
+
+  // Adiciona equipamento DEFAULT no fim, ou CS logo após insertIndex
+  function addEquip(pontoIdx, lista, type = 'DEFAULT', insertIndex) {
+    setPontos(prev => prev.map((p, i) => {
+      if (i !== pontoIdx) return p;
+      const novo = novoEquip(type);
+      const arr = insertIndex === undefined
+        ? [...p[lista], novo]
+        : [...p[lista].slice(0, insertIndex + 1), novo, ...p[lista].slice(insertIndex + 1)];
+      return { ...p, [lista]: arr };
+    }));
+  }
+
+  function removeEquip(pontoIdx, lista, equipIdx) {
+    setPontos(prev => prev.map((p, i) =>
+      i === pontoIdx ? { ...p, [lista]: p[lista].filter((_, j) => j !== equipIdx) } : p
+    ));
+  }
+
   function handleConcluir() {
     onConcluir({ pontos, colaboradorEDP, colaboradorParceira });
     onClose();
+  }
+
+  // Renderiza a lista de equipamentos (aplicados ou removidos) de um ponto
+  function renderEquipList(pontoIdx, lista, label) {
+    const ponto = pontos[pontoIdx];
+    const inp = [s.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }];
+    const lbl = [s.label, { color: colors.fieldLabel }];
+    return (
+      <>
+        {ponto[lista].map((eq, equipIdx) => {
+          const isCS = eq.type === 'CS';
+          const powerOptions = isCS ? CS_BRANDS : (POWER_OPTIONS[eq.equipment] || []);
+          return (
+            <View key={equipIdx} style={[s.equipCard, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
+              <View style={s.cardHeader}>
+                <Text style={[s.equipTitle, { color: colors.heading }]}>
+                  {isCS ? 'CS' : `Equipamento ${equipIdx + 1}`}
+                </Text>
+                <TouchableOpacity onPress={() => removeEquip(pontoIdx, lista, equipIdx)}>
+                  <Text style={s.remover}>Remover</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Equipamento / Número CS (ID) */}
+              {isCS ? (
+                <>
+                  <Text style={lbl}>Número CS (ID)</Text>
+                  <TextInput
+                    style={inp}
+                    value={eq.equipment?.startsWith('CS') ? eq.equipment : 'CS' + (eq.equipment || '')}
+                    onChangeText={v => updateEquip(pontoIdx, lista, equipIdx, 'equipment', v)}
+                    placeholder="CS..." placeholderTextColor={colors.textMuted} autoCapitalize="characters"
+                  />
+                </>
+              ) : (
+                <>
+                  <Text style={lbl}>Equipamento</Text>
+                  <Dropdown
+                    value={eq.equipment}
+                    options={EQUIPMENTS}
+                    placeholder="Selecionar"
+                    onSelect={v => selecionarEquipamento(pontoIdx, lista, equipIdx, v)}
+                  />
+                </>
+              )}
+
+              {/* Número de Instalação */}
+              <Text style={lbl}>Número de Instalação</Text>
+              <TextInput
+                style={inp}
+                value={installationDisplay(eq)}
+                onChangeText={v => updateEquip(pontoIdx, lista, equipIdx, 'installation', v)}
+                placeholder="Número de Instalação" placeholderTextColor={colors.textMuted}
+              />
+
+              {/* Potência / Marca CS */}
+              <Text style={lbl}>{isCS ? 'Marca CS' : 'Potência'}</Text>
+              <Dropdown
+                value={eq.power}
+                options={powerOptions}
+                placeholder={isCS ? 'Selecionar marca' : 'Selecionar potência'}
+                onSelect={v => updateEquip(pontoIdx, lista, equipIdx, 'power', v)}
+              />
+
+              {/* Patrimônio / Número de série — só números, máx 8 dígitos */}
+              <Text style={lbl}>{isCS ? 'Número de série' : 'Patrimônio'}</Text>
+              <TextInput
+                style={inp}
+                value={eq.patrimony}
+                onChangeText={v => updateEquip(pontoIdx, lista, equipIdx, 'patrimony', v.replace(/\D/g, '').slice(0, 8))}
+                placeholder={isCS ? 'Número de série' : 'Patrimônio'} placeholderTextColor={colors.textMuted}
+                keyboardType="numeric"
+              />
+
+              {/* Adicionar CS — apenas para Transformador (insere logo após este) */}
+              {eq.equipment === 'Transformador' && (
+                <TouchableOpacity
+                  style={[s.addCsBtn, { borderColor: colors.heading }]}
+                  onPress={() => addEquip(pontoIdx, lista, 'CS', equipIdx)}
+                >
+                  <Text style={[s.addCsText, { color: colors.heading }]}>+ Adicionar CS</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        })}
+
+        <TouchableOpacity
+          style={[s.addBtn, { borderColor: colors.heading }]}
+          onPress={() => addEquip(pontoIdx, lista, 'DEFAULT')}
+        >
+          <Text style={[s.addBtnText, { color: colors.heading }]}>+ Adicionar {label}</Text>
+        </TouchableOpacity>
+      </>
+    );
   }
 
   return (
@@ -120,207 +301,77 @@ export default function FichaEquipamentoModal({ visible, onClose, onConcluir, ob
           <Text style={[s.formSubtitle, { color: colors.textMuted }]}>(RE, RV, BC E ESTAÇÃO TRANSFORMADORA)</Text>
 
           <View style={[s.infoCard, { backgroundColor: colors.equipeRowActiveBg, borderColor: colors.border }]}>
-            <InfoRow label="Nota / OV" value={obra?.['Ov/Nota'] ?? '—'} />
-            <InfoRow label="Tipo de Obra" value={obra?.['Tipo'] ?? '—'} />
-            <InfoRow label="Empreiteira" value={obra?.['Empreiteira'] ?? '—'} />
+            <InfoRow label="Nota / OV" value={obra?.['OVNOTA'] ?? '—'} />
+            <InfoRow label="Tipo de Obra" value={obra?.['TIPOOBRA'] ?? '—'} />
+            <InfoRow label="Empreiteira" value={obra?.['PARCEIRA'] ?? '—'} />
           </View>
 
-          {pontos.map((ponto, idx) => {
-            const inp = [s.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }];
-            const lbl = [s.label, { color: colors.fieldLabel }];
-            return (
-              <View key={idx} style={[s.card, { backgroundColor: colors.card }]}>
-                <View style={s.cardHeader}>
-                  <Text style={[s.cardTitle, { color: colors.heading }]}>Ponto {idx + 1}</Text>
-                  {pontos.length > 1 && (
-                    <TouchableOpacity onPress={() => setPontos(p => p.filter((_, i) => i !== idx))}>
-                      <Text style={s.remover}>Remover</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* 1. Número */}
-                <Text style={lbl}>Número do Ponto</Text>
-                <TextInput style={inp} value={ponto.numero}
-                  onChangeText={v => updatePonto(idx, 'numero', v)}
-                  placeholder="Ex: 1" placeholderTextColor={colors.textMuted} keyboardType="numeric" />
-
-                {/* 2. Pergunta aplicados + campos */}
-                <Text style={[s.pergunta, { color: colors.text }]}>Possui equipamentos aplicados?</Text>
-                <SimNao value={ponto.possuiAplicados} onChange={v => updatePonto(idx, 'possuiAplicados', v)} />
-
-                {ponto.possuiAplicados === 'Sim' && (
-                  <>
-                    <Text style={[s.secao, { color: colors.heading, borderBottomColor: colors.border }]}>INSTALADO</Text>
-                    <View style={s.row2}>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Potência (KVA)</Text>
-                        <TextInput style={inp} value={ponto.instalado.potencia}
-                          onChangeText={v => updateSub(idx, 'instalado', 'potencia', v)}
-                          placeholder="KVA" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" />
-                      </View>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Patrimônio</Text>
-                        <TextInput style={inp} value={ponto.instalado.patrimonio}
-                          onChangeText={v => updateSub(idx, 'instalado', 'patrimonio', v)}
-                          placeholder="Patrimônio" placeholderTextColor={colors.textMuted} />
-                      </View>
-                    </View>
-                    <Text style={lbl}>Fase Instalação</Text>
-                    <TextInput style={inp} value={ponto.instalado.faseInstalacao}
-                      onChangeText={v => updateSub(idx, 'instalado', 'faseInstalacao', v)}
-                      placeholder="Ex: Monofásico, Bifásico, Trifásico" placeholderTextColor={colors.textMuted} />
-                    <View style={s.row2}>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Série</Text>
-                        <TextInput style={inp} value={ponto.instalado.serie}
-                          onChangeText={v => updateSub(idx, 'instalado', 'serie', v)}
-                          placeholder="Série" placeholderTextColor={colors.textMuted} />
-                      </View>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Marca</Text>
-                        <TextInput style={inp} value={ponto.instalado.marca}
-                          onChangeText={v => updateSub(idx, 'instalado', 'marca', v)}
-                          placeholder="Marca" placeholderTextColor={colors.textMuted} />
-                      </View>
-                    </View>
-                    <View style={s.row2}>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Ano Fabricação</Text>
-                        <TextInput style={inp} value={ponto.instalado.anoFabricacao}
-                          onChangeText={v => updateSub(idx, 'instalado', 'anoFabricacao', v)}
-                          placeholder="Ano" placeholderTextColor={colors.textMuted} keyboardType="numeric" />
-                      </View>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Nº da Instalação</Text>
-                        <TextInput style={inp} value={ponto.instalado.nInstalacao}
-                          onChangeText={v => updateSub(idx, 'instalado', 'nInstalacao', v)}
-                          placeholder="Nº" placeholderTextColor={colors.textMuted} />
-                      </View>
-                    </View>
-
-                    <Text style={[s.secao, { color: colors.heading, borderBottomColor: colors.border }]}>TENSÃO (V)</Text>
-                    <View style={s.tensaoRow}>
-                      {FASES_TENSAO.map(fase => (
-                        <View key={fase} style={s.tensaoItem}>
-                          <Text style={[s.tensaoLabel, { color: colors.text }]}>{fase}</Text>
-                          <TextInput
-                            style={[s.tensaoInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }]}
-                            value={ponto.tensoes[fase]} onChangeText={v => updateSub(idx, 'tensoes', fase, v)}
-                            placeholder="0.0" placeholderTextColor={colors.textMuted}
-                            keyboardType="decimal-pad" textAlign="center" />
-                        </View>
-                      ))}
-                    </View>
-
-                    <Text style={[s.secao, { color: colors.heading, borderBottomColor: colors.border }]}>FOTOS — INSTALADO</Text>
-                    <View style={s.fotosRow}>
-                      {ponto.fotosInstalado.map((uri, fotoIdx) => (
-                        <View key={fotoIdx} style={s.fotoSlot}>
-                          {uri ? (
-                            <>
-                              <Image source={{ uri }} style={s.fotoImg} />
-                              <TouchableOpacity style={s.fotoRemove} onPress={() => removerFoto(idx, 'fotosInstalado', fotoIdx)}>
-                                <Text style={s.fotoRemoveText}>✕</Text>
-                              </TouchableOpacity>
-                            </>
-                          ) : (
-                            <TouchableOpacity
-                              style={[s.fotoAdd, { backgroundColor: colors.inputBg, borderColor: colors.border }]}
-                              onPress={() => anexarFoto(idx, 'fotosInstalado', fotoIdx)}>
-                              <Text style={s.fotoAddIcon}>📷</Text>
-                              <Text style={[s.fotoAddText, { color: colors.textMuted }]}>Foto {fotoIdx + 1}</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                      ))}
-                    </View>
-                  </>
-                )}
-
-                <View style={[s.divisor, { backgroundColor: colors.border }]} />
-
-                {/* 3. Pergunta removidos + campos */}
-                <Text style={[s.pergunta, { color: colors.text }]}>Possui equipamentos removidos?</Text>
-                <SimNao value={ponto.possuiRemovidos} onChange={v => updatePonto(idx, 'possuiRemovidos', v)} />
-
-                {ponto.possuiRemovidos === 'Sim' && (
-                  <>
-                    <Text style={[s.secao, { color: colors.heading, borderBottomColor: colors.border }]}>RETIRADO</Text>
-                    <View style={s.row2}>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Potência (KVA)</Text>
-                        <TextInput style={inp} value={ponto.retirado.potencia}
-                          onChangeText={v => updateSub(idx, 'retirado', 'potencia', v)}
-                          placeholder="KVA" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" />
-                      </View>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Patrimônio</Text>
-                        <TextInput style={inp} value={ponto.retirado.patrimonio}
-                          onChangeText={v => updateSub(idx, 'retirado', 'patrimonio', v)}
-                          placeholder="Patrimônio" placeholderTextColor={colors.textMuted} />
-                      </View>
-                    </View>
-                    <View style={s.row2}>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Série</Text>
-                        <TextInput style={inp} value={ponto.retirado.serie}
-                          onChangeText={v => updateSub(idx, 'retirado', 'serie', v)}
-                          placeholder="Série" placeholderTextColor={colors.textMuted} />
-                      </View>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Marca</Text>
-                        <TextInput style={inp} value={ponto.retirado.marca}
-                          onChangeText={v => updateSub(idx, 'retirado', 'marca', v)}
-                          placeholder="Marca" placeholderTextColor={colors.textMuted} />
-                      </View>
-                    </View>
-                    <View style={s.row2}>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Ano Fabricação</Text>
-                        <TextInput style={inp} value={ponto.retirado.anoFabricacao}
-                          onChangeText={v => updateSub(idx, 'retirado', 'anoFabricacao', v)}
-                          placeholder="Ano" placeholderTextColor={colors.textMuted} keyboardType="numeric" />
-                      </View>
-                      <View style={s.metade}>
-                        <Text style={lbl}>Nº da Instalação</Text>
-                        <TextInput style={inp} value={ponto.retirado.nInstalacao}
-                          onChangeText={v => updateSub(idx, 'retirado', 'nInstalacao', v)}
-                          placeholder="Nº" placeholderTextColor={colors.textMuted} />
-                      </View>
-                    </View>
-
-                    <Text style={[s.secao, { color: colors.heading, borderBottomColor: colors.border }]}>FOTOS — RETIRADO</Text>
-                    <View style={s.fotosRow}>
-                      {ponto.fotosRetirado.map((uri, fotoIdx) => (
-                        <View key={fotoIdx} style={s.fotoSlot}>
-                          {uri ? (
-                            <>
-                              <Image source={{ uri }} style={s.fotoImg} />
-                              <TouchableOpacity style={s.fotoRemove} onPress={() => removerFoto(idx, 'fotosRetirado', fotoIdx)}>
-                                <Text style={s.fotoRemoveText}>✕</Text>
-                              </TouchableOpacity>
-                            </>
-                          ) : (
-                            <TouchableOpacity
-                              style={[s.fotoAdd, { backgroundColor: colors.inputBg, borderColor: colors.border }]}
-                              onPress={() => anexarFoto(idx, 'fotosRetirado', fotoIdx)}>
-                              <Text style={s.fotoAddIcon}>📷</Text>
-                              <Text style={[s.fotoAddText, { color: colors.textMuted }]}>Foto {fotoIdx + 1}</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                      ))}
-                    </View>
-                  </>
-                )}
+          {pontos.map((ponto, idx) => (
+            <View key={idx} style={[s.card, { backgroundColor: colors.card }]}>
+              <View style={s.cardHeader}>
+                <Text style={[s.cardTitle, { color: colors.heading }]}>
+                  {ponto.numero ? `Ponto ${ponto.numero}` : `Ponto ${idx + 1}`}
+                </Text>
+                <TouchableOpacity onPress={() => setPontos(p => p.filter((_, i) => i !== idx))}>
+                  <Text style={s.remover}>Remover</Text>
+                </TouchableOpacity>
               </View>
-            );
-          })}
 
-          <TouchableOpacity style={[s.addBtn, { borderColor: colors.heading }]} onPress={() => setPontos(p => [...p, novoPonto()])}>
-            <Text style={[s.addBtnText, { color: colors.heading }]}>+ Adicionar Ponto</Text>
-          </TouchableOpacity>
+              {/* Número do Ponto */}
+              <Text style={[s.label, { color: colors.fieldLabel }]}>Número do Ponto</Text>
+              <TextInput
+                style={[s.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }]}
+                value={ponto.numero}
+                onChangeText={v => updatePonto(idx, 'numero', v)}
+                placeholder="Ex: 1" placeholderTextColor={colors.textMuted} keyboardType="numeric"
+              />
+
+              {/* Possui equipamentos aplicados? */}
+              <Text style={[s.pergunta, { color: colors.text }]}>Possui equipamentos aplicados?</Text>
+              <SimNao value={ponto.possuiAplicados} onChange={v => updatePonto(idx, 'possuiAplicados', v)} />
+              {ponto.possuiAplicados === 'Sim' && renderEquipList(idx, 'aplicados', 'equipamento aplicado')}
+
+              <View style={[s.divisor, { backgroundColor: colors.border }]} />
+
+              {/* Possui equipamentos removidos? */}
+              <Text style={[s.pergunta, { color: colors.text }]}>Possui equipamentos removidos?</Text>
+              <SimNao value={ponto.possuiRemovidos} onChange={v => updatePonto(idx, 'possuiRemovidos', v)} />
+              {ponto.possuiRemovidos === 'Sim' && renderEquipList(idx, 'removidos', 'equipamento removido')}
+            </View>
+          ))}
+
+          {pontos.length === 0 && !showPicker && (
+            <Text style={[s.emptyHint, { color: colors.textMuted }]}>
+              Nenhum ponto adicionado. Toque em "+ Adicionar Ponto" para selecionar o ponto programado.
+            </Text>
+          )}
+
+          {/* Seletor de ponto programado (números vindos do Excel) */}
+          {showPicker && (
+            <View style={[s.pickerCard, { backgroundColor: colors.card }]}>
+              <Text style={[s.pickerTitle, { color: colors.heading }]}>Ponto Programado</Text>
+              {pontosDisponiveis.map(p => (
+                <TouchableOpacity key={p} style={[s.pickerItem, { borderColor: colors.border }]} onPress={() => adicionarPonto(p)}>
+                  <Text style={[s.pickerItemText, { color: colors.text }]}>{p}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity
+                style={[s.pickerItem, s.pickerItemNovo, { borderColor: colors.border }]}
+                onPress={() => adicionarPonto('')}
+              >
+                <Text style={s.pickerItemNovoText}>+ Novo ponto</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowPicker(false)} style={s.pickerCancelar}>
+                <Text style={[s.pickerCancelarText, { color: colors.textMuted }]}>Cancelar</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {!showPicker && (
+            <TouchableOpacity style={[s.addBtn, { borderColor: colors.heading }]} onPress={() => setShowPicker(true)}>
+              <Text style={[s.addBtnText, { color: colors.heading }]}>+ Adicionar Ponto</Text>
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity style={s.concluirBtn} onPress={handleConcluir}>
             <Text style={s.concluirText}>Concluir Ficha</Text>
@@ -366,37 +417,36 @@ const s = StyleSheet.create({
   cardTitle: { fontSize: 14, fontWeight: '800', marginBottom: 4 },
   remover: { fontSize: 12, color: '#EF4444', fontWeight: '600' },
   pergunta: { fontSize: 13, fontWeight: '700', marginTop: 12, marginBottom: 6 },
-  secao: {
-    fontSize: 11, fontWeight: '800',
-    marginTop: 14, marginBottom: 6, letterSpacing: 0.5,
-    borderBottomWidth: 1, paddingBottom: 4,
-  },
   label: { fontSize: 11, fontWeight: '700', marginTop: 8, marginBottom: 4, textTransform: 'uppercase' },
   input: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 13 },
-  tensaoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  tensaoItem: { width: '30%', alignItems: 'center' },
-  tensaoLabel: { fontSize: 11, fontWeight: '700', marginBottom: 3 },
-  tensaoInput: { borderWidth: 1, borderRadius: 6, paddingVertical: 6, fontSize: 13, width: '100%' },
-  row2: { flexDirection: 'row', gap: 8 },
-  metade: { flex: 1 },
+  dropdown: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   divisor: { height: 1, marginVertical: 14 },
-  fotosRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  fotoSlot: { flex: 1, aspectRatio: 1, borderRadius: 8, overflow: 'hidden' },
-  fotoImg: { width: '100%', height: '100%' },
-  fotoRemove: {
-    position: 'absolute', top: 4, right: 4,
-    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 10,
-    width: 22, height: 22, justifyContent: 'center', alignItems: 'center',
-  },
-  fotoRemoveText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
-  fotoAdd: {
-    flex: 1, borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 8,
-    justifyContent: 'center', alignItems: 'center', paddingVertical: 14,
-  },
-  fotoAddIcon: { fontSize: 20 },
-  fotoAddText: { fontSize: 10, fontWeight: '600' },
-  addBtn: { borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginBottom: 12 },
+
+  equipCard: { borderWidth: 1, borderRadius: 10, padding: 12, marginTop: 10 },
+  equipTitle: { fontSize: 13, fontWeight: '800' },
+
+  addBtn: { borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginTop: 10, marginBottom: 4 },
   addBtnText: { fontSize: 13, fontWeight: '700' },
+  addCsBtn: { borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 8, paddingVertical: 8, alignItems: 'center', marginTop: 10 },
+  addCsText: { fontSize: 12, fontWeight: '700' },
+
+  emptyHint: { fontSize: 12, textAlign: 'center', marginBottom: 10, fontStyle: 'italic' },
+  pickerCard: {
+    borderRadius: 12, padding: 14, marginBottom: 12, marginTop: 4, elevation: 3,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08, shadowRadius: 6,
+  },
+  pickerTitle: { fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginBottom: 10, letterSpacing: 0.4 },
+  pickerItem: {
+    borderWidth: 1, borderRadius: 8, paddingVertical: 10,
+    paddingHorizontal: 14, marginBottom: 6, alignItems: 'center',
+  },
+  pickerItemText: { fontSize: 15, fontWeight: '700' },
+  pickerItemNovo: { borderStyle: 'dashed' },
+  pickerItemNovoText: { fontSize: 14, fontWeight: '700', color: '#1E3A5F' },
+  pickerCancelar: { alignItems: 'center', paddingVertical: 8, marginTop: 2 },
+  pickerCancelarText: { fontSize: 13, fontWeight: '600' },
+
   simNaoRow: { flexDirection: 'row', gap: 16, marginBottom: 4 },
   checkOpcao: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   checkBox: {
@@ -406,6 +456,24 @@ const s = StyleSheet.create({
   checkBoxAtivo: { backgroundColor: '#1E3A5F', borderColor: '#1E3A5F' },
   checkMark: { color: '#FFF', fontSize: 11, fontWeight: '800' },
   checkLabel: { fontSize: 13, fontWeight: '500' },
+
+  // Dropdown modal
+  ddOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center', padding: 32,
+  },
+  ddCard: {
+    borderRadius: 14, paddingVertical: 6, width: '100%', maxHeight: '70%',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2, shadowRadius: 20, elevation: 10,
+  },
+  ddItem: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 18, paddingVertical: 14, borderBottomWidth: 1,
+  },
+  ddItemText: { fontSize: 15, fontWeight: '600' },
+  ddEmpty: { fontSize: 13, textAlign: 'center', padding: 18, fontStyle: 'italic' },
+
   concluirBtn: { backgroundColor: '#16A34A', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
   concluirText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
 });

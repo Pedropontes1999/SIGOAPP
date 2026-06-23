@@ -14,6 +14,12 @@ import ObraScreen from './src/screens/ObraScreen';
 import TrajetoScreen from './src/screens/TrajetoScreen';
 import InternoScreen from './src/screens/InternoScreen';
 import InternoLoginScreen from './src/screens/InternoLoginScreen';
+import SelecaoVeiculoScreen from './src/screens/SelecaoVeiculoScreen';
+import ImportInternoScreen from './src/screens/ImportInternoScreen';
+import TrajetoInternoScreen from './src/screens/TrajetoInternoScreen';
+import EquipesFiscalizacaoScreen from './src/screens/EquipesFiscalizacaoScreen';
+import ConfirmacaoEquipeScreen from './src/screens/ConfirmacaoEquipeScreen';
+import QuestionarioInternoScreen from './src/screens/QuestionarioInternoScreen';
 import FiscalizacaoScreen from './src/screens/FiscalizacaoScreen';
 
 const Stack = createNativeStackNavigator();
@@ -48,6 +54,12 @@ function RootNavigator() {
         </>
       ) : (
         <>
+          <Stack.Screen name="SelecaoVeiculo" component={SelecaoVeiculoScreen} />
+          <Stack.Screen name="ImportInterno" component={ImportInternoScreen} />
+          <Stack.Screen name="TrajetoInterno" component={TrajetoInternoScreen} />
+          <Stack.Screen name="EquipesFiscalizacao" component={EquipesFiscalizacaoScreen} />
+          <Stack.Screen name="ConfirmacaoEquipe" component={ConfirmacaoEquipeScreen} />
+          <Stack.Screen name="QuestionarioInterno" component={QuestionarioInternoScreen} />
           <Stack.Screen name="Interno" component={InternoScreen} />
           <Stack.Screen name="Fiscalizacao" component={FiscalizacaoScreen} />
         </>

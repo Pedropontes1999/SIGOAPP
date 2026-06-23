@@ -82,6 +82,9 @@ export function buildWorkbook(report) {
   if (report.alteracaoExecucao) {
     cronRows.push(['Alteração de Execução', report.alteracaoExecucao]);
   }
+  if (report.justificativaAlteracao) {
+    cronRows.push(['Justificativa da Alteração', report.justificativaAlteracao]);
+  }
   if (report.observacoesGerais) {
     cronRows.push(['Observações Gerais', report.observacoesGerais]);
   }
@@ -134,30 +137,25 @@ export function buildWorkbook(report) {
       ['Colaborador Parceira', feq?.colaboradorParceira ?? ''],
       [],
     ];
+    // Cabeçalho + linhas de uma lista de equipamentos (aplicados ou removidos)
+    const pushEquipamentos = (lista) => {
+      r.push(['', 'Equipamento', 'Nº Instalação', 'Potência/Marca', 'Patrimônio/Série', 'Tipo']);
+      lista.forEach(e => {
+        r.push(['', e.equipment ?? '', e.installation ?? '', e.power ?? '', e.patrimony ?? '', e.type ?? 'DEFAULT']);
+      });
+    };
+
     if (feq?.pontos?.length > 0) {
       feq.pontos.forEach((p, i) => {
-        r.push([`PONTO ${i + 1}`]);
+        r.push([`PONTO ${p.numero || i + 1}`]);
         r.push(['Número do Ponto', p.numero ?? '']);
         r.push(['Possui equipamentos aplicados?', p.possuiAplicados ?? '']);
-        if (p.possuiAplicados === 'Sim') {
-          r.push(['INSTALADO — Potência (KVA)', p.instalado?.potencia ?? '']);
-          r.push(['Patrimônio',                p.instalado?.patrimonio ?? '']);
-          r.push(['Fase Instalação',           p.instalado?.faseInstalacao ?? '']);
-          r.push(['Série',                     p.instalado?.serie ?? '']);
-          r.push(['Marca',                     p.instalado?.marca ?? '']);
-          r.push(['Ano Fabricação',            p.instalado?.anoFabricacao ?? '']);
-          r.push(['Nº Instalação',             p.instalado?.nInstalacao ?? '']);
-          r.push(['TENSÃO — NA', p.tensoes?.NA ?? '', 'NB', p.tensoes?.NB ?? '', 'NC', p.tensoes?.NC ?? '']);
-          r.push(['AB',          p.tensoes?.AB ?? '', 'AC', p.tensoes?.AC ?? '', 'BC', p.tensoes?.BC ?? '']);
+        if (p.possuiAplicados === 'Sim' && p.aplicados?.length > 0) {
+          pushEquipamentos(p.aplicados);
         }
         r.push(['Possui equipamentos removidos?', p.possuiRemovidos ?? '']);
-        if (p.possuiRemovidos === 'Sim') {
-          r.push(['RETIRADO — Potência (KVA)', p.retirado?.potencia ?? '']);
-          r.push(['Patrimônio',               p.retirado?.patrimonio ?? '']);
-          r.push(['Série',                    p.retirado?.serie ?? '']);
-          r.push(['Marca',                    p.retirado?.marca ?? '']);
-          r.push(['Ano Fabricação',           p.retirado?.anoFabricacao ?? '']);
-          r.push(['Nº Instalação',            p.retirado?.nInstalacao ?? '']);
+        if (p.possuiRemovidos === 'Sim' && p.removidos?.length > 0) {
+          pushEquipamentos(p.removidos);
         }
         r.push([]);
       });
@@ -165,15 +163,6 @@ export function buildWorkbook(report) {
       r.push(['PONTO 1']);
       r.push(['Número do Ponto', '']);
       r.push(['Possui equipamentos aplicados?', '']);
-      r.push(['INSTALADO — Potência (KVA)', '']);
-      r.push(['Patrimônio', '']);
-      r.push(['Fase Instalação', '']);
-      r.push(['Série', '']);
-      r.push(['Marca', '']);
-      r.push(['Ano Fabricação', '']);
-      r.push(['Nº Instalação', '']);
-      r.push(['TENSÃO — NA', '', 'NB', '', 'NC', '']);
-      r.push(['AB', '', 'AC', '', 'BC', '']);
       r.push(['Possui equipamentos removidos?', '']);
     }
     XLSX.utils.book_append_sheet(wb, sheet(r,

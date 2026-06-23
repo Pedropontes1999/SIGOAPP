@@ -68,7 +68,9 @@ export default function InternoScreen({ navigation }) {
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Painel Interno</Text>
-          <Text style={styles.headerSub}>Olá, {user?.nome?.split(' ')[0]}</Text>
+          <Text style={styles.headerSub}>
+            Olá, {user?.nome?.split(' ')[0]}{user?.veiculo ? ` · 🚗 ${user.veiculo.placa}` : ''}
+          </Text>
         </View>
         <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
           <TouchableOpacity onPress={openSidebar} style={styles.headerBtn}>

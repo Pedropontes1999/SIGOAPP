@@ -1,3 +1,5 @@
+import { MOCK_USERS } from './mockUsers';
+
 // Real team members keyed by sigla; first member (leader) is the logged-in user and is excluded.
 const TEAM_MEMBERS = {
   ENGLM01: ['SILVIO SANTOS DE MELO - Motorista','NIKOLAS OLIVEIRA ARAUJO - Eletricista','KELVIN BATISTA DE OLIVEIRA DIAS - Eletricista','IGOR VAGULA ALVES DA CUNHA - Eletricista','CARLOS ROBERTO SEMIÃO - Eletricista','ENZO GERONIMO ALVES PEREIRA - Ajudante','HENRIQUE NASTRI SANTANA DE SOUZA - Ajudante'],
@@ -69,4 +71,25 @@ export function getPlaceholderMembers(user) {
     const funcao = funcoes[i] ?? 'Auxiliar';
     return `${nome} - ${funcao}`;
   });
+}
+
+// Quebra "NOME - Função" em { nome, funcao }
+function parseMembro(label, id, funcaoPadrao = 'Colaborador') {
+  const dash = label.lastIndexOf(' - ');
+  const nome = (dash >= 0 ? label.slice(0, dash) : label).trim();
+  const funcao = (dash >= 0 ? label.slice(dash + 3) : '').trim() || funcaoPadrao;
+  return { id, nome, funcao };
+}
+
+// Roster COMPLETO de uma equipe para a conferência do interno:
+// encarregado (líder real do cadastro) + integrantes reais, na mesma
+// composição usada no fluxo do parceiro (respeita qtdColaboradores).
+export function getRosterEquipe(sigla) {
+  const u = MOCK_USERS[sigla] ?? {};
+  const roster = [];
+  if (u.nome) roster.push({ id: `${sigla}-0`, nome: u.nome, funcao: 'Encarregado' });
+  getPlaceholderMembers(u).forEach((label, i) => {
+    roster.push(parseMembro(label, `${sigla}-${i + 1}`));
+  });
+  return roster;
 }

@@ -27,19 +27,28 @@ export default function LoginFormScreen({ navigation }) {
   const { login } = useAuth();
   const [selectedParceira, setSelectedParceira] = useState(null);
   const [selectedSigla, setSelectedSigla]       = useState(null);
+  const [busca, setBusca]                       = useState('');
   const [password, setPassword]                 = useState('1234');
   const [showPassword, setShowPassword]         = useState(false);
   const [loading, setLoading]                   = useState(false);
 
-  // Filtra siglas disponíveis com base na parceira escolhida
+  // Filtra siglas disponíveis com base na parceira escolhida e na busca
   const siglas = selectedParceira
     ? Object.values(MOCK_USERS)
         .filter(u => u.parceira === selectedParceira)
+        .filter(u => {
+          const q = busca.trim().toLowerCase();
+          if (!q) return true;
+          return u.sigla.toLowerCase().includes(q) || u.nome.toLowerCase().includes(q);
+        })
         .sort((a, b) => a.sigla.localeCompare(b.sigla))
     : [];
 
+  const selecionado = selectedSigla ? MOCK_USERS[selectedSigla] : null;
+
   // Trocar de parceira reseta a sigla selecionada
   function handleParceira(p) {
+    setBusca('');
     if (selectedParceira === p) {
       setSelectedParceira(null);
       setSelectedSigla(null);
@@ -106,28 +115,67 @@ export default function LoginFormScreen({ navigation }) {
             ))}
           </View>
 
-          {/* Chips de sigla aparecem somente após escolher a parceira */}
+          {/* Seleção de sigla aparece somente após escolher a parceira */}
           {selectedParceira && (
             <>
               <Text style={styles.label}>Selecione sua sigla</Text>
-              {/* Altura fixa (58px) garante uniformidade independente do tamanho do nome */}
-              <View style={styles.chipsWrap}>
-                {siglas.map(u => (
-                  <TouchableOpacity
-                    key={u.sigla}
-                    style={[styles.siglaChip, selectedSigla === u.sigla && styles.chipActive]}
-                    onPress={() => setSelectedSigla(v => v === u.sigla ? null : u.sigla)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.siglaCod, selectedSigla === u.sigla && styles.siglaCodActive]}>
-                      {u.sigla}
-                    </Text>
-                    <Text style={[styles.siglaNome, selectedSigla === u.sigla && styles.siglaNomeActive]}>
-                      {u.nome}
-                    </Text>
+
+              {/* Resumo enxuto quando já há uma sigla escolhida */}
+              {selecionado ? (
+                <View style={styles.selectedRow}>
+                  <View style={styles.siglaBadgeActive}>
+                    <Text style={styles.siglaBadgeTextActive}>{selecionado.sigla}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.selectedNome} numberOfLines={1}>{selecionado.nome}</Text>
+                    <Text style={styles.selectedHint}>Toque em trocar para mudar</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setSelectedSigla(null)} style={styles.trocarBtn} activeOpacity={0.7}>
+                    <Text style={styles.trocarText}>Trocar</Text>
                   </TouchableOpacity>
-                ))}
-              </View>
+                </View>
+              ) : (
+                <>
+                  {/* Busca por sigla ou nome */}
+                  <View style={styles.searchWrapper}>
+                    <Feather name="search" size={16} color="#9CA3AF" />
+                    <TextInput
+                      style={styles.searchInput}
+                      placeholder="Buscar por sigla ou nome"
+                      placeholderTextColor="#9CA3AF"
+                      value={busca}
+                      onChangeText={setBusca}
+                    />
+                  </View>
+
+                  {/* Lista vertical estilo EDP — badge + nome */}
+                  <ScrollView
+                    style={styles.userList}
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                  >
+                    {siglas.length === 0 ? (
+                      <Text style={styles.empty}>Nenhuma sigla encontrada.</Text>
+                    ) : (
+                      siglas.map((u, idx) => (
+                        <TouchableOpacity
+                          key={u.sigla}
+                          style={[styles.userRow, idx === siglas.length - 1 && { borderBottomWidth: 0 }]}
+                          onPress={() => { setSelectedSigla(u.sigla); setBusca(''); }}
+                          activeOpacity={0.7}
+                        >
+                          <View style={styles.siglaBadge}>
+                            <Text style={styles.siglaBadgeText}>{u.sigla}</Text>
+                          </View>
+                          <Text style={styles.userNome} numberOfLines={1}>{u.nome}</Text>
+                          <Feather name="chevron-right" size={18} color="#CBD5E1" />
+                        </TouchableOpacity>
+                      ))
+                    )}
+                  </ScrollView>
+                </>
+              )}
             </>
           )}
 
@@ -195,15 +243,52 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13, fontWeight: '600', color: '#374151' },
   chipTextActive: { color: '#FFFFFF' },
 
-  siglaChip: {
-    paddingHorizontal: 12, borderRadius: 12, height: 58,
-    borderWidth: 1.5, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB',
-    alignItems: 'center', justifyContent: 'center', minWidth: 90,
+  // Busca
+  searchWrapper: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 10,
+    backgroundColor: '#F9FAFB', paddingHorizontal: 12,
   },
-  siglaCod: { fontSize: 12, fontWeight: '800', color: '#212E3E' },
-  siglaCodActive: { color: '#FFFFFF' },
-  siglaNome: { fontSize: 10, color: '#6B7280', marginTop: 2 },
-  siglaNomeActive: { color: '#93C5FD' },
+  searchInput: { flex: 1, paddingVertical: 11, fontSize: 14, color: '#111827' },
+
+  // Lista de siglas (estilo EDP)
+  userList: {
+    maxHeight: 260, marginTop: 10,
+    borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  userRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 12, paddingHorizontal: 12,
+    borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
+  },
+  userNome: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1F2937' },
+  empty: { fontSize: 13, color: '#9CA3AF', textAlign: 'center', paddingVertical: 24 },
+
+  siglaBadge: {
+    backgroundColor: '#EFF2F7', borderRadius: 8, paddingHorizontal: 10,
+    paddingVertical: 6, minWidth: 90, alignItems: 'center',
+  },
+  siglaBadgeText: { fontSize: 12, fontWeight: '800', color: '#212E3E' },
+
+  // Resumo do selecionado
+  selectedRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4,
+    borderWidth: 1.5, borderColor: '#212E3E', borderRadius: 12,
+    backgroundColor: '#F0FDF4', padding: 12,
+  },
+  siglaBadgeActive: {
+    backgroundColor: '#212E3E', borderRadius: 8, paddingHorizontal: 10,
+    paddingVertical: 6, minWidth: 90, alignItems: 'center',
+  },
+  siglaBadgeTextActive: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  selectedNome: { fontSize: 14, fontWeight: '700', color: '#212E3E' },
+  selectedHint: { fontSize: 11, color: '#6B7280', marginTop: 2 },
+  trocarBtn: {
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
+    backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#212E3E',
+  },
+  trocarText: { fontSize: 12, fontWeight: '700', color: '#212E3E' },
 
   passwordWrapper: {
     flexDirection: 'row', alignItems: 'center',

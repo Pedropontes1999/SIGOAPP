@@ -32,10 +32,19 @@ export function AuthProvider({ children }) {
       placa: found.placa || '',
       tipoVeiculo: found.tipoVeiculo || '',
       qtdColaboradores: found.qtdColaboradores || 0,
+      email: found.email || '',
+      veiculo: null, // veículo escolhido após o login (interno)
     };
     await saveAuth(userData);
     setUser(userData);
     return true;
+  }
+
+  // Registra o veículo escolhido pelo interno e persiste na sessão
+  async function selectVeiculo(veiculo) {
+    const updated = { ...user, veiculo };
+    await saveAuth(updated);
+    setUser(updated);
   }
 
   // Limpa auth e qualquer sessão de trajeto em aberto ao sair
@@ -48,7 +57,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading }}>
+    <AuthContext.Provider value={{ user, login, logout, loading, selectVeiculo }}>
       {children}
     </AuthContext.Provider>
   );

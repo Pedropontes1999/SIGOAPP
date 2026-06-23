@@ -8,6 +8,15 @@ import * as Location from 'expo-location';
 import { useTheme } from '../context/ThemeContext';
 import { useSidebar } from '../context/SidebarContext';
 
+// Limita a medição a no máximo 2 dígitos inteiros e 1 casa decimal (ex: 20.5)
+function formatMedicao(v) {
+  const s = v.replace(/[^0-9.,]/g, '').replace(',', '.');
+  const [intPart = '', ...rest] = s.split('.');
+  const inteiro = intPart.slice(0, 2);
+  if (rest.length === 0) return inteiro;          // ainda sem separador
+  return inteiro + '.' + rest.join('').slice(0, 1); // 1 casa decimal
+}
+
 const novoPonto = (numeroPonto = '') => ({
   coordenada: '',
   rua: '',
@@ -73,7 +82,8 @@ export default function FichaMedicaoAterramentoModal({ visible, onClose, onConcl
           rua = [endereco?.street, endereco?.district, endereco?.city].filter(Boolean).join(', ');
         }
       } catch { /* coordenadas obtidas, rua fica vazia */ }
-      setPontos(prev => prev.map((p, i) => i === idx ? { ...p, coordenada: coordStr, rua } : p));
+      // Trava a rua somente quando o GPS conseguiu preenchê-la
+      setPontos(prev => prev.map((p, i) => i === idx ? { ...p, coordenada: coordStr, rua, ruaTravada: !!rua } : p));
     } catch (e) {
       Alert.alert('Erro ao obter localização', e?.message || 'Verifique as permissões do navegador/GPS.');
     } finally {
@@ -171,19 +181,23 @@ export default function FichaMedicaoAterramentoModal({ visible, onClose, onConcl
                   }
                 </TouchableOpacity>
               </View>
+              {/* Coordenada é sempre bloqueada — preenchida apenas pelo botão "Usar GPS" */}
               <TextInput
-                style={[s.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }]}
+                style={[s.input, s.inputDisabled, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.textMuted }]}
                 value={ponto.coordenada}
-                onChangeText={v => updatePonto(idx, 'coordenada', v)}
-                placeholder="-23.654165, -45.564654"
+                editable={false}
+                placeholder="Toque em 'Usar GPS' para preencher"
                 placeholderTextColor={colors.textMuted}
               />
 
               <Text style={[s.label, { color: colors.fieldLabel }]}>Rua / Avenida / Estrada</Text>
+              {/* Trava após ser preenchida pelo GPS; editável enquanto o GPS não preenche */}
               <TextInput
-                style={[s.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }]}
+                style={[s.input, ponto.ruaTravada && s.inputDisabled,
+                  { backgroundColor: colors.inputBg, borderColor: colors.border, color: ponto.ruaTravada ? colors.textMuted : colors.inputText }]}
                 value={ponto.rua}
                 onChangeText={v => updatePonto(idx, 'rua', v)}
+                editable={!ponto.ruaTravada}
                 placeholder="Nome da rua"
                 placeholderTextColor={colors.textMuted}
               />
@@ -221,7 +235,7 @@ export default function FichaMedicaoAterramentoModal({ visible, onClose, onConcl
                   <TextInput
                     style={[s.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }]}
                     value={ponto.medicaoFinal}
-                    onChangeText={v => updatePonto(idx, 'medicaoFinal', v)}
+                    onChangeText={v => updatePonto(idx, 'medicaoFinal', formatMedicao(v))}
                     placeholder="Ex: 20.5"
                     placeholderTextColor={colors.textMuted}
                     keyboardType="decimal-pad"
@@ -232,7 +246,7 @@ export default function FichaMedicaoAterramentoModal({ visible, onClose, onConcl
                   <TextInput
                     style={[s.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }]}
                     value={ponto.qtHastes}
-                    onChangeText={v => updatePonto(idx, 'qtHastes', v)}
+                    onChangeText={v => updatePonto(idx, 'qtHastes', v.replace(/[^0-9]/g, '').slice(0, 2))}
                     placeholder="Ex: 3"
                     placeholderTextColor={colors.textMuted}
                     keyboardType="numeric"
@@ -348,6 +362,7 @@ const s = StyleSheet.create({
     borderWidth: 1, borderRadius: 8,
     paddingHorizontal: 10, paddingVertical: 8, fontSize: 13,
   },
+  inputDisabled: { opacity: 0.7 },
   toggleRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
   toggleBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1.5, alignItems: 'center' },
   toggleAtivo: { backgroundColor: '#1E3A5F', borderColor: '#1E3A5F' },

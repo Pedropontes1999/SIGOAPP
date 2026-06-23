@@ -114,6 +114,7 @@ export default function TrajetoScreen({ route, navigation }) {
   const [modalChecklistAberto, setModalChecklistAberto] = useState(null); // 1 | 2 | 3 | null
   const [dadosFichas, setDadosFichas] = useState({ 1: null, 2: null, 3: null }); // dados de cada ficha
   const [alteracaoExecucao, setAlteracaoExecucao] = useState(''); // 'Sim' | 'Não' | ''
+  const [justificativaAlteracao, setJustificativaAlteracao] = useState(''); // exibida quando alteracaoExecucao === 'Sim'
   const [observacoesGerais, setObservacoesGerais] = useState('');
 
   // Pontos de trabalho lidos da coluna BC do Excel, ex: "2,5,8"
@@ -177,6 +178,7 @@ export default function TrajetoScreen({ route, navigation }) {
         setChecklistsNA(s.checklistsNA ?? {});
         setDadosFichas(s.dadosFichas ?? { 1: null, 2: null, 3: null });
         setAlteracaoExecucao(s.alteracaoExecucao ?? '');
+        setJustificativaAlteracao(s.justificativaAlteracao ?? '');
         setObservacoesGerais(s.observacoesGerais ?? '');
         if (s.pontosExecucao) setPontosExecucao(s.pontosExecucao.map(p => ({
           restricao: '', responsabilidade: '', observacao: '', ...p,
@@ -217,6 +219,7 @@ export default function TrajetoScreen({ route, navigation }) {
       checklistsNA,
       dadosFichas,
       alteracaoExecucao,
+      justificativaAlteracao,
       observacoesGerais,
       pontosExecucao,
       fotos,
@@ -226,7 +229,7 @@ export default function TrajetoScreen({ route, navigation }) {
     });
   }, [sessionLoaded, stage, phaseStartedAt, inicioDeslocamento, fimDeslocamento, inicioAtividade,
       inicioDeslocamentoVolta, fimDeslocamentoVolta, checklistsFeitos, checklistsNA, dadosFichas,
-      alteracaoExecucao, observacoesGerais, pontosExecucao, fotos, pausaAtual, pausas, eventosLocalizacao]);
+      alteracaoExecucao, justificativaAlteracao, observacoesGerais, pontosExecucao, fotos, pausaAtual, pausas, eventosLocalizacao]);
 
   // Registra evento com coordenadas GPS; fallback sem localização se GPS falhar
   async function registrarEvento(nome) {
@@ -394,6 +397,7 @@ export default function TrajetoScreen({ route, navigation }) {
         checklistsFeitos,
         dadosFichas,
         alteracaoExecucao,
+        justificativaAlteracao,
         observacoesGerais,
         pontosExecucao,
       };
@@ -790,6 +794,22 @@ export default function TrajetoScreen({ route, navigation }) {
                     </TouchableOpacity>
                   ))}
                 </View>
+                {alteracaoExecucao === 'Sim' && (
+                  <>
+                    <Text style={[styles.execPergunta, { color: colors.text }]}>Justifique as alterações</Text>
+                    <TextInput
+                      style={[styles.execTextArea, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }]}
+                      value={justificativaAlteracao}
+                      onChangeText={setJustificativaAlteracao}
+                      placeholder="Descreva as alterações em relação ao projeto..."
+                      placeholderTextColor="#9CA3AF"
+                      multiline
+                      numberOfLines={3}
+                      textAlignVertical="top"
+                      editable={stage === 'atividade'}
+                    />
+                  </>
+                )}
                 <Text style={[styles.execPergunta, { color: colors.text }]}>Observações gerais</Text>
                 <TextInput
                   style={[styles.execTextArea, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.inputText }]}
@@ -1008,6 +1028,7 @@ export default function TrajetoScreen({ route, navigation }) {
           setChecklistsFeitos(prev => ({ ...prev, 2: true }));
         }}
         obra={obra}
+        pontosProgramados={pontosExecucao.map(p => p.ponto)}
       />
 
       {/* Modal DP */}
