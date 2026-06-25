@@ -53,36 +53,37 @@ export default function TrajetoInternoScreen({ route, navigation }) {
   const emAndamento = inicio && !fim;
   const finalizado  = inicio && fim;
 
-  // Soma das pausas já concluídas (ms)
-  function pausasConcluidasMs() {
-    return pausas.reduce((acc, p) => acc + (p.fim.getTime() - p.inicio.getTime()), 0);
+  // Encerra a pausa ativa (se houver), registrando-a no histórico — igual ao parceiro
+  function encerrarPausaAtiva() {
+    if (pausaAtual) {
+      setPausas(prev => [...prev, { ...pausaAtual, fim: new Date() }]);
+      setPausaAtual(null);
+    }
   }
 
-  // Timer ao vivo enquanto o trajeto está em andamento; congela durante a pausa
+  // Timer ao vivo enquanto o trajeto está em andamento.
+  // Pausas só ocorrem nos pontos de descanso (antes de iniciar e após finalizar),
+  // nunca durante o trajeto — então a duração é simplesmente início → fim, igual ao parceiro.
   useEffect(() => {
     if (emAndamento) {
-      const tick = () => {
-        const ativaMs = pausaAtual ? (Date.now() - pausaAtual.inicio.getTime()) : 0;
-        setElapsed((Date.now() - inicio.getTime() - pausasConcluidasMs() - ativaMs) / 1000);
-      };
+      const tick = () => setElapsed((Date.now() - inicio.getTime()) / 1000);
       tick();
       intervalRef.current = setInterval(tick, 1000);
       return () => clearInterval(intervalRef.current);
     }
-  }, [inicio, fim, pausaAtual, pausas]);
+  }, [inicio, fim]);
 
+  // Iniciar fecha a pausa ativa (se houver), igual ao botão "Iniciar" do parceiro
   function iniciarTrajeto() {
+    encerrarPausaAtiva();
     setInicio(new Date());
     setFim(null);
     setDuracao(0);
     setElapsed(0);
-    setPausas([]);
-    setPausaAtual(null);
   }
 
   function finalizarTrajeto() {
-    const dur = (Date.now() - inicio.getTime() - pausasConcluidasMs()) / 1000;
-    setDuracao(dur);
+    setDuracao((Date.now() - inicio.getTime()) / 1000);
     setFim(new Date());
   }
 
@@ -92,13 +93,8 @@ export default function TrajetoInternoScreen({ route, navigation }) {
     setShowPausaModal(false);
   }
 
-  function retomar() {
-    if (!pausaAtual) return;
-    setPausas(prev => [...prev, { ...pausaAtual, fim: new Date() }]);
-    setPausaAtual(null);
-  }
-
   function iniciarAtividade() {
+    encerrarPausaAtiva();
     navigation.navigate('EquipesFiscalizacao', {
       equipes,
       projeto,
@@ -169,53 +165,50 @@ export default function TrajetoInternoScreen({ route, navigation }) {
             </View>
           )}
 
-          {/* Ações */}
+          {/* Ações — pausa só aparece nos pontos de descanso, igual ao parceiro:
+              antes de iniciar o trajeto e após finalizá-lo (nunca durante o trajeto) */}
           {!inicio && (
-            <TouchableOpacity style={[styles.actionBtn, styles.startBtn]} onPress={iniciarTrajeto} activeOpacity={0.85}>
-              <Feather name="navigation" size={18} color="#FFF" />
-              <Text style={styles.actionBtnText}>Iniciar Trajeto</Text>
+            <View style={styles.btnRow}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.pauseBtn, pausaAtual && styles.pauseBtnAtiva]}
+                onPress={() => { setMotivoPausa(''); setShowPausaModal(true); }}
+                disabled={!!pausaAtual}
+                activeOpacity={0.85}
+              >
+                <Feather name="pause" size={18} color="#FFF" />
+                <Text style={styles.actionBtnText}>{pausaAtual ? 'Em pausa' : 'Pausa'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actionBtn, styles.startBtn, { flex: 1 }]} onPress={iniciarTrajeto} activeOpacity={0.85}>
+                <Feather name="navigation" size={18} color="#FFF" />
+                <Text style={styles.actionBtnText}>Iniciar Trajeto</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Em andamento: só finalizar — sem pausa durante o trajeto, igual ao parceiro */}
+          {emAndamento && (
+            <TouchableOpacity style={[styles.actionBtn, styles.stopBtn]} onPress={finalizarTrajeto} activeOpacity={0.85}>
+              <Feather name="flag" size={18} color="#FFF" />
+              <Text style={styles.actionBtnText}>Finalizar Trajeto</Text>
             </TouchableOpacity>
           )}
 
-          {/* Em andamento: Finalizar + Pausa lado a lado (ou Retomar se pausado) */}
-          {emAndamento && (
-            pausaAtual ? (
-              <TouchableOpacity style={[styles.actionBtn, styles.resumeBtn]} onPress={retomar} activeOpacity={0.85}>
-                <Feather name="play" size={18} color="#FFF" />
-                <Text style={styles.actionBtnText}>Retomar</Text>
-              </TouchableOpacity>
-            ) : (
-              <View style={styles.btnRow}>
-                <TouchableOpacity style={[styles.actionBtn, styles.stopBtn, { flex: 1 }]} onPress={finalizarTrajeto} activeOpacity={0.85}>
-                  <Feather name="flag" size={18} color="#FFF" />
-                  <Text style={styles.actionBtnText}>Finalizar Trajeto</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.actionBtn, styles.pauseBtn]} onPress={() => { setMotivoPausa(''); setShowPausaModal(true); }} activeOpacity={0.85}>
-                  <Feather name="pause" size={18} color="#FFF" />
-                  <Text style={styles.actionBtnText}>Pausa</Text>
-                </TouchableOpacity>
-              </View>
-            )
-          )}
-
-          {/* Finalizado: selo + botão de pausa (ou Retomar) */}
+          {/* Finalizado: selo + pausa (encerrada automaticamente ao iniciar a atividade) */}
           {finalizado && (
             <>
               <View style={styles.doneBadge}>
                 <Feather name="check-circle" size={16} color="#16A34A" />
                 <Text style={styles.doneBadgeText}>Trajeto finalizado</Text>
               </View>
-              {pausaAtual ? (
-                <TouchableOpacity style={[styles.actionBtn, styles.resumeBtn, { marginTop: 10 }]} onPress={retomar} activeOpacity={0.85}>
-                  <Feather name="play" size={18} color="#FFF" />
-                  <Text style={styles.actionBtnText}>Retomar</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={[styles.actionBtn, styles.pauseBtn, { marginTop: 10 }]} onPress={() => { setMotivoPausa(''); setShowPausaModal(true); }} activeOpacity={0.85}>
-                  <Feather name="pause" size={18} color="#FFF" />
-                  <Text style={styles.actionBtnText}>Pausa</Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.pauseBtn, pausaAtual && styles.pauseBtnAtiva, { marginTop: 10 }]}
+                onPress={() => { setMotivoPausa(''); setShowPausaModal(true); }}
+                disabled={!!pausaAtual}
+                activeOpacity={0.85}
+              >
+                <Feather name="pause" size={18} color="#FFF" />
+                <Text style={styles.actionBtnText}>{pausaAtual ? 'Em pausa' : 'Pausa'}</Text>
+              </TouchableOpacity>
             </>
           )}
 
@@ -241,9 +234,9 @@ export default function TrajetoInternoScreen({ route, navigation }) {
       {/* Iniciar atividade libera só após finalizar o trajeto e sem pausa ativa */}
       <View style={[styles.footer, { backgroundColor: colors.footerBg, borderTopColor: colors.footerBorder }]}>
         <TouchableOpacity
-          style={[styles.footerBtn, (!finalizado || pausaAtual) && styles.footerBtnDisabled]}
+          style={[styles.footerBtn, !finalizado && styles.footerBtnDisabled]}
           onPress={iniciarAtividade}
-          disabled={!finalizado || !!pausaAtual}
+          disabled={!finalizado}
           activeOpacity={0.85}
         >
           <Text style={styles.footerBtnText}>Iniciar Atividade</Text>
@@ -330,7 +323,7 @@ const styles = StyleSheet.create({
   startBtn: { backgroundColor: '#16A34A' },
   stopBtn: { backgroundColor: '#DC2626' },
   pauseBtn: { backgroundColor: '#475569' },
-  resumeBtn: { backgroundColor: '#16A34A' },
+  pauseBtnAtiva: { backgroundColor: '#64748B', opacity: 0.6 },
   actionBtnText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
 
   doneBadge: {

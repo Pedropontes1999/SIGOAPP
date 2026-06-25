@@ -1,11 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, StatusBar, ScrollView,
+  SafeAreaView, StatusBar, ScrollView, Modal, TextInput,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { getRosterEquipe } from '../data/mockMembers';
+
+// Funções sugeridas ao adicionar um funcionário que veio no lugar de outro
+const FUNCOES_SUGERIDAS = ['Eletricista', 'Motorista', 'Ajudante', 'Auxiliar', 'Encarregado'];
 
 // Iniciais do nome para o avatar
 function iniciais(nome) {
@@ -21,14 +24,27 @@ export default function ConfirmacaoEquipeScreen({ route, navigation }) {
   // presença já registrada antes (ao reabrir a equipe) ou tudo presente por padrão
   const presencaInicial = route?.params?.presencas;
 
-  const membros = useMemo(() => getRosterEquipe(equipe.sigla), [equipe.sigla]);
+  const roster = useMemo(() => getRosterEquipe(equipe.sigla), [equipe.sigla]);
+
+  // Funcionários adicionados manualmente (vieram no lugar de alguém ausente)
+  const [extras, setExtras] = useState(() => route?.params?.extras ?? []);
+
+  // Lista completa exibida = roster cadastrado + extras adicionados na conferência
+  const membros = useMemo(() => [...roster, ...extras], [roster, extras]);
 
   // Map id -> boolean (true = presente). Começa todos presentes.
   const [presencas, setPresencas] = useState(() => {
     const init = {};
-    membros.forEach(m => { init[m.id] = presencaInicial ? !!presencaInicial[m.id] : true; });
+    [...roster, ...(route?.params?.extras ?? [])].forEach(m => {
+      init[m.id] = presencaInicial ? !!presencaInicial[m.id] : true;
+    });
     return init;
   });
+
+  // Modal de "adicionar funcionário"
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [novoNome, setNovoNome]         = useState('');
+  const [novaFuncao, setNovaFuncao]     = useState('');
 
   const presentes = membros.filter(m => presencas[m.id]).length;
   const ausentes  = membros.length - presentes;
@@ -37,8 +53,32 @@ export default function ConfirmacaoEquipeScreen({ route, navigation }) {
     setPresencas(prev => ({ ...prev, [id]: valor }));
   }
 
+  function abrirAddModal() {
+    setNovoNome('');
+    setNovaFuncao('');
+    setShowAddModal(true);
+  }
+
+  function adicionarFuncionario() {
+    const nome = novoNome.trim();
+    if (!nome) return;
+    const novo = { id: `${equipe.sigla}-extra-${Date.now()}`, nome, funcao: novaFuncao.trim() || 'Colaborador', extra: true };
+    setExtras(prev => [...prev, novo]);
+    setPresencas(prev => ({ ...prev, [novo.id]: true }));
+    setShowAddModal(false);
+  }
+
+  function removerExtra(id) {
+    setExtras(prev => prev.filter(m => m.id !== id));
+    setPresencas(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
+
   function confirmar() {
-    onConfirmar?.(presencas);
+    onConfirmar?.(presencas, extras);
     navigation.goBack();
   }
 
@@ -115,10 +155,22 @@ export default function ConfirmacaoEquipeScreen({ route, navigation }) {
                     <Feather name="x" size={14} color={!presente ? '#FFF' : '#9CA3AF'} />
                   </TouchableOpacity>
                 </View>
+
+                {m.extra && (
+                  <TouchableOpacity style={styles.removeExtra} onPress={() => removerExtra(m.id)} activeOpacity={0.7}>
+                    <Feather name="trash-2" size={16} color="#B91C1C" />
+                  </TouchableOpacity>
+                )}
               </View>
             );
           })}
         </View>
+
+        {/* Adicionar funcionário que veio no lugar de um ausente */}
+        <TouchableOpacity style={[styles.addBtn, { borderColor: colors.equipeRowBorder }]} onPress={abrirAddModal} activeOpacity={0.8}>
+          <Feather name="user-plus" size={18} color="#1E3A5F" />
+          <Text style={styles.addBtnText}>Adicionar funcionário</Text>
+        </TouchableOpacity>
       </ScrollView>
 
       <View style={[styles.footer, { backgroundColor: colors.footerBg, borderTopColor: colors.footerBorder }]}>
@@ -127,6 +179,61 @@ export default function ConfirmacaoEquipeScreen({ route, navigation }) {
           <Text style={styles.footerBtnText}>Confirmar equipe</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Modal: adicionar funcionário (substituto enviado pela parceira) */}
+      <Modal visible={showAddModal} transparent animationType="fade" onRequestClose={() => setShowAddModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.heading }]}>Adicionar funcionário</Text>
+            <Text style={[styles.modalSub, { color: colors.equipeSub }]}>
+              Para quando a parceira envia alguém no lugar de um ausente.
+            </Text>
+
+            <Text style={[styles.modalLabel, { color: colors.heading }]}>Nome</Text>
+            <TextInput
+              style={[styles.modalInput, { borderColor: colors.equipeRowBorder, color: colors.equipeNome }]}
+              value={novoNome}
+              onChangeText={setNovoNome}
+              placeholder="Nome completo"
+              placeholderTextColor="#9CA3AF"
+              autoFocus
+            />
+
+            <Text style={[styles.modalLabel, { color: colors.heading }]}>Função</Text>
+            <View style={styles.funcoesWrap}>
+              {FUNCOES_SUGERIDAS.map(f => {
+                const ativo = novaFuncao === f;
+                return (
+                  <TouchableOpacity
+                    key={f}
+                    style={[styles.funcaoChip, { borderColor: colors.equipeRowBorder }, ativo && styles.funcaoChipAtivo]}
+                    onPress={() => setNovaFuncao(f)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.funcaoChipText, { color: colors.equipeNome }, ativo && styles.funcaoChipTextAtivo]}>{f}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <TextInput
+              style={[styles.modalInput, { borderColor: colors.equipeRowBorder, color: colors.equipeNome, marginTop: 8 }]}
+              value={novaFuncao}
+              onChangeText={setNovaFuncao}
+              placeholder="Ou digite outra função"
+              placeholderTextColor="#9CA3AF"
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={[styles.modalCancelBtn, { borderColor: colors.equipeRowBorder }]} onPress={() => setShowAddModal(false)} activeOpacity={0.8}>
+                <Text style={[styles.modalCancelText, { color: colors.equipeSub }]}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalConfirmBtn, !novoNome.trim() && styles.modalConfirmDisabled]} onPress={adicionarFuncionario} disabled={!novoNome.trim()} activeOpacity={0.8}>
+                <Text style={styles.modalConfirmText}>Adicionar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -191,6 +298,15 @@ const styles = StyleSheet.create({
   togglePresenteAtivo: { backgroundColor: '#16A34A' },
   toggleAusenteAtivo: { backgroundColor: '#DC2626' },
 
+  removeExtra: { padding: 6, marginLeft: 4 },
+
+  addBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 12, paddingVertical: 14, borderRadius: 14,
+    borderWidth: 1.5, borderStyle: 'dashed',
+  },
+  addBtnText: { fontSize: 14, fontWeight: '700', color: '#1E3A5F' },
+
   footer: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1,
@@ -202,4 +318,32 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E3A5F', borderRadius: 12, paddingVertical: 14,
   },
   footerBtnText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
+
+  // Modal adicionar funcionário
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center', padding: 24,
+  },
+  modalCard: {
+    borderRadius: 20, padding: 24, width: '100%', maxWidth: 480,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2, shadowRadius: 20, elevation: 10,
+  },
+  modalTitle: { fontSize: 16, fontWeight: '800' },
+  modalSub: { fontSize: 12, marginTop: 4, marginBottom: 14 },
+  modalLabel: { fontSize: 13, fontWeight: '700', marginTop: 8, marginBottom: 6 },
+  modalInput: {
+    borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14,
+  },
+  funcoesWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  funcaoChip: { borderWidth: 1.5, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
+  funcaoChipAtivo: { backgroundColor: '#1E3A5F', borderColor: '#1E3A5F' },
+  funcaoChipText: { fontSize: 13, fontWeight: '600' },
+  funcaoChipTextAtivo: { color: '#FFF', fontWeight: '800' },
+  modalActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
+  modalCancelBtn: { flex: 1, paddingVertical: 13, borderRadius: 10, borderWidth: 1.5, alignItems: 'center' },
+  modalCancelText: { fontSize: 14, fontWeight: '600' },
+  modalConfirmBtn: { flex: 1, paddingVertical: 13, borderRadius: 10, backgroundColor: '#1E3A5F', alignItems: 'center' },
+  modalConfirmDisabled: { backgroundColor: '#D1D5DB' },
+  modalConfirmText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
 });

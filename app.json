@@ -15,7 +15,9 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Necessário para registrar a localização nos eventos de deslocamento."
+        "NSLocationWhenInUseUsageDescription": "Necessário para registrar a localização nos eventos de deslocamento.",
+        "NSCameraUsageDescription": "Necessário para tirar fotos do DP e do AS BUILD.",
+        "NSPhotoLibraryUsageDescription": "Necessário para anexar fotos da galeria ao relatório."
       }
     },
     "android": {
@@ -26,11 +28,21 @@
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.READ_EXTERNAL_STORAGE"
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.CAMERA"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Necessário para tirar fotos do DP e do AS BUILD.",
+          "photosPermission": "Necessário para anexar fotos da galeria ao relatório."
+        }
+      ]
+    ]
   }
 }

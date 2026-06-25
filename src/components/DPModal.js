@@ -17,10 +17,12 @@ function excelTimeToHHMM(serial) {
   return `${h}:${m}`;
 }
 
-// Converte serial Excel para minutos totais
+// Converte serial Excel para minutos totais; null se não for número válido
 function excelSerialToMin(serial) {
   if (!serial && serial !== 0) return null;
-  return Math.round((Number(serial) % 1) * 24 * 60);
+  const n = Number(serial);
+  if (!Number.isFinite(n)) return null;
+  return Math.round((n % 1) * 24 * 60);
 }
 
 // Converte string "HH:MM" para minutos totais; retorna null se inválido
@@ -43,6 +45,14 @@ function formatHHMM(text) {
   const h = Math.min(parseInt(digits.slice(0, 2), 10), 23);
   const m = Math.min(parseInt(digits.slice(2), 10), 59);
   return String(h).padStart(2, '0') + ':' + String(m).padStart(digits.length === 4 ? 2 : 1, '0');
+}
+
+// Formata minutos de atraso em texto curto: 65 -> "1h05", 40 -> "40 min"
+function fmtAtraso(min) {
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, '0')}`;
 }
 
 // Toggle Sim/Não reutilizável — dois botões exclusivos
@@ -94,6 +104,21 @@ export default function DPModal({ visible, onClose, onConcluir, obra }) {
   const [colaboradorEDP, setColaboradorEDP] = useState('');
   const [colaboradorParceira, setColaboradorParceira] = useState('');
 
+  // ── ATRASO ── compara a DURAÇÃO real x programada (não o horário absoluto).
+  // Ex.: prog 08:00→17:00 = 9h; real 07:00→16:01 = 9h01 → atraso de 1 min,
+  // mesmo tendo começado e terminado mais cedo.
+  const progIni = excelSerialToMin(obra?.['HORAINI']);
+  const progTer = excelSerialToMin(obra?.['HORATER']);
+  const realIni = hhmmToMin(horaInicio);
+  const realCon = hhmmToMin(horaConclusao);
+  const progDuracaoMin = (progIni != null && progTer != null && progTer > progIni) ? progTer - progIni : null;
+  const realDuracaoMin = (realIni != null && realCon != null && realCon > realIni) ? realCon - realIni : null;
+  const atrasoMin = (progDuracaoMin != null && realDuracaoMin != null && realDuracaoMin > progDuracaoMin)
+    ? realDuracaoMin - progDuracaoMin : 0;
+  const temAtraso = atrasoMin > 0;
+  // Justificativa é obrigatória só quando há atraso; sem atraso, segue normal
+  const justificativaPendente = temAtraso && !justificarAtraso.trim();
+
   async function anexarFoto(idx) {
     if (Platform.OS !== 'web') {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -103,7 +128,7 @@ export default function DPModal({ visible, onClose, onConcluir, obra }) {
       }
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.8,
     });
     if (!result.canceled && result.assets?.length > 0) {
@@ -112,12 +137,27 @@ export default function DPModal({ visible, onClose, onConcluir, obra }) {
   }
 
   async function tirarFoto(idx) {
-    if (Platform.OS !== 'web') {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permissão necessária', 'Autorize o acesso à câmera.');
-        return;
-      }
+    // No navegador (inclusive celular), launchCameraAsync não é confiável.
+    // Usa um <input> com capture, que abre a câmera direto no celular.
+    if (Platform.OS === 'web') {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.capture = 'environment';
+      input.onchange = e => {
+        const file = e.target.files?.[0];
+        if (file) {
+          const url = URL.createObjectURL(file);
+          setFotosDP(prev => prev.map((f, i) => i === idx ? url : f));
+        }
+      };
+      input.click();
+      return;
+    }
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permissão necessária', 'Autorize o acesso à câmera.');
+      return;
     }
     const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
     if (!result.canceled && result.assets?.length > 0) {
@@ -126,9 +166,16 @@ export default function DPModal({ visible, onClose, onConcluir, obra }) {
   }
 
   function handleConcluir() {
+    // Havendo atraso, exige a justificativa — mas depois disso segue normal
+    if (justificativaPendente) {
+      Alert.alert('Justificativa do atraso', 'Foi registrado atraso no horário real. Justifique o atraso para concluir o DP.');
+      return;
+    }
     onConcluir({
       fotosDP, horaInicio, horaConclusao,
-      contatoInicioCOI, contatoTerminoCOI, justificarAtraso,
+      contatoInicioCOI, contatoTerminoCOI,
+      justificarAtraso: temAtraso ? justificarAtraso : '',
+      atrasoMin, progDuracaoMin, realDuracaoMin,
       chaveProvisoria, motivoChave, refInstalacaoChave,
       chaveRetirada, refChaveRetirada,
       observacoes, colaboradorEDP, colaboradorParceira,
@@ -205,26 +252,29 @@ export default function DPModal({ visible, onClose, onConcluir, obra }) {
             </View>
           </View>
 
-          {(() => {
-            const progIni = excelSerialToMin(obra?.['HORAINI']);
-            const progTer = excelSerialToMin(obra?.['HORATER']);
-            const realIni = hhmmToMin(horaInicio);
-            const realCon = hhmmToMin(horaConclusao);
-            const temAtraso = progTer !== null && realCon !== null && realCon > progTer;
-            if (!temAtraso) return null;
-            return (
-              <View style={[s.card, { backgroundColor: colors.card, borderLeftWidth: 3, borderLeftColor: '#EF4444' }]}>
-                <Text style={[s.cardTitle, { color: '#EF4444' }]}>Justificar Atraso</Text>
-                <TextInput
-                  style={[s.textArea, { backgroundColor: colors.inputBg, borderColor: '#EF4444', color: colors.inputText }]}
-                  value={justificarAtraso} onChangeText={setJustificarAtraso}
-                  placeholder="Descreva o motivo do atraso..."
-                  placeholderTextColor="#EF4444"
-                  multiline numberOfLines={3} textAlignVertical="top"
-                />
+          {temAtraso && (
+            <View style={[s.card, { backgroundColor: colors.card, borderLeftWidth: 3, borderLeftColor: '#EF4444' }]}>
+              <Text style={[s.cardTitle, { color: '#EF4444' }]}>Justificar Atraso</Text>
+              <View style={s.atrasoTags}>
+                <View style={s.atrasoTag}>
+                  <Text style={s.atrasoTagText}>Atraso: +{fmtAtraso(atrasoMin)}</Text>
+                </View>
               </View>
-            );
-          })()}
+              <Text style={s.atrasoResumo}>
+                Duração programada {fmtAtraso(progDuracaoMin)} · real {fmtAtraso(realDuracaoMin)}
+              </Text>
+              <TextInput
+                style={[s.textArea, { backgroundColor: colors.inputBg, borderColor: '#EF4444', color: colors.inputText }]}
+                value={justificarAtraso} onChangeText={setJustificarAtraso}
+                placeholder="Descreva o motivo do atraso..."
+                placeholderTextColor="#EF4444"
+                multiline numberOfLines={3} textAlignVertical="top"
+              />
+              <Text style={s.atrasoHint}>
+                Justifique o atraso para concluir o DP. Após justificar, você pode seguir normalmente.
+              </Text>
+            </View>
+          )}
 
           <View style={[s.card, { backgroundColor: colors.card }]}>
             <Text style={[s.cardTitle, { color: colors.heading }]}>Contatos COI</Text>
@@ -316,30 +366,34 @@ export default function DPModal({ visible, onClose, onConcluir, obra }) {
                       </TouchableOpacity>
                     </View>
                   ) : (
-                    <TouchableOpacity
-                      style={[s.fotoOpcao, { backgroundColor: colors.inputBg, borderColor: obrig ? '#EF4444' : colors.border }]}
-                      onPress={() => Alert.alert(
-                        'Adicionar foto',
-                        'Como deseja adicionar a foto?',
-                        [
-                          { text: 'Câmera', onPress: () => tirarFoto(idx) },
-                          { text: 'Galeria', onPress: () => anexarFoto(idx) },
-                          { text: 'Cancelar', style: 'cancel' },
-                        ]
-                      )}
-                    >
-                      <Text style={[s.fotoOpcaoText, { color: obrig ? '#EF4444' : colors.textMuted }]}>
-                        + Adicionar foto
-                      </Text>
-                    </TouchableOpacity>
+                    <View style={[s.fotoOpcao, { backgroundColor: colors.inputBg, borderColor: obrig ? '#EF4444' : colors.border }]}>
+                      <TouchableOpacity
+                        style={[s.fotoBtn, { borderColor: obrig ? '#EF4444' : colors.border }]}
+                        onPress={() => tirarFoto(idx)}
+                      >
+                        <Text style={[s.fotoBtnText, { color: obrig ? '#EF4444' : colors.textSub }]}>📷 Câmera</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[s.fotoBtn, { borderColor: obrig ? '#EF4444' : colors.border }]}
+                        onPress={() => anexarFoto(idx)}
+                      >
+                        <Text style={[s.fotoBtnText, { color: obrig ? '#EF4444' : colors.textSub }]}>🖼 Galeria</Text>
+                      </TouchableOpacity>
+                    </View>
                   )}
                 </View>
               );
             })}
           </View>
 
-          <TouchableOpacity style={s.concluirBtn} onPress={handleConcluir}>
-            <Text style={s.concluirText}>Concluir DP</Text>
+          <TouchableOpacity
+            style={[s.concluirBtn, justificativaPendente && s.concluirBtnDisabled]}
+            onPress={handleConcluir}
+            disabled={justificativaPendente}
+          >
+            <Text style={s.concluirText}>
+              {justificativaPendente ? 'Justifique o atraso para concluir' : 'Concluir DP'}
+            </Text>
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
@@ -399,13 +453,23 @@ const s = StyleSheet.create({
   fotoRemoveText: { color: '#EF4444', fontSize: 13, fontWeight: '600' },
   fotoOpcao: {
     borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 10,
-    justifyContent: 'center', alignItems: 'center', paddingVertical: 18,
+    flexDirection: 'row', gap: 10, padding: 12,
   },
-  fotoOpcaoText: { fontSize: 13, fontWeight: '700' },
+  fotoBtn: {
+    flex: 1, borderWidth: 1.5, borderRadius: 8,
+    paddingVertical: 12, alignItems: 'center', justifyContent: 'center',
+  },
+  fotoBtnText: { fontSize: 13, fontWeight: '700' },
   inputReadOnly: {
     borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8,
   },
   inputReadOnlyText: { fontSize: 13, fontWeight: '700' },
   concluirBtn: { backgroundColor: '#16A34A', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
+  concluirBtnDisabled: { backgroundColor: '#D1D5DB' },
   concluirText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
+  atrasoTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  atrasoTag: { backgroundColor: '#FEE2E2', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
+  atrasoTagText: { fontSize: 12, fontWeight: '700', color: '#B91C1C' },
+  atrasoResumo: { fontSize: 12, color: '#6B7280', marginTop: 8, fontWeight: '600' },
+  atrasoHint: { fontSize: 11, color: '#9CA3AF', marginTop: 8 },
 });
