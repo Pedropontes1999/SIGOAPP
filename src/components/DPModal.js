@@ -116,8 +116,23 @@ export default function DPModal({ visible, onClose, onConcluir, obra }) {
   const atrasoMin = (progDuracaoMin != null && realDuracaoMin != null && realDuracaoMin > progDuracaoMin)
     ? realDuracaoMin - progDuracaoMin : 0;
   const temAtraso = atrasoMin > 0;
-  // Justificativa é obrigatória só quando há atraso; sem atraso, segue normal
-  const justificativaPendente = temAtraso && !justificarAtraso.trim();
+
+  // ── VALIDAÇÃO ── o DP só conclui com todas as perguntas respondidas
+  const pendenciasDP = [];
+  if (realIni == null) pendenciasDP.push('Hora de início (real)');
+  if (realCon == null) pendenciasDP.push('Hora de conclusão (real)');
+  if (temAtraso && !justificarAtraso.trim()) pendenciasDP.push('Justificativa do atraso');
+  if (!contatoInicioCOI.trim()) pendenciasDP.push('Contato de início COI');
+  if (!contatoTerminoCOI.trim()) pendenciasDP.push('Contato de término COI');
+  if (!chaveProvisoria) pendenciasDP.push('Houve instalação de chave provisória?');
+  if (chaveProvisoria === 'Sim') {
+    if (!motivoChave.trim()) pendenciasDP.push('Motivo da chave provisória');
+    if (!refInstalacaoChave.trim()) pendenciasDP.push('Referência de instalação da chave');
+    if (!chaveRetirada) pendenciasDP.push('Chave provisória foi retirada?');
+    if (chaveRetirada === 'Sim' && !refChaveRetirada.trim()) pendenciasDP.push('Referência da chave retirada');
+  }
+  if (!fotosDP[0]) pendenciasDP.push('Foto 1 do DP (obrigatória)');
+  const dpCompleto = pendenciasDP.length === 0;
 
   async function anexarFoto(idx) {
     if (Platform.OS !== 'web') {
@@ -166,9 +181,12 @@ export default function DPModal({ visible, onClose, onConcluir, obra }) {
   }
 
   function handleConcluir() {
-    // Havendo atraso, exige a justificativa — mas depois disso segue normal
-    if (justificativaPendente) {
-      Alert.alert('Justificativa do atraso', 'Foi registrado atraso no horário real. Justifique o atraso para concluir o DP.');
+    // Só conclui com todas as perguntas do DP respondidas
+    if (!dpCompleto) {
+      Alert.alert(
+        `Faltam ${pendenciasDP.length} resposta${pendenciasDP.length > 1 ? 's' : ''} no DP`,
+        pendenciasDP.slice(0, 8).join('\n') + (pendenciasDP.length > 8 ? '\n…' : '')
+      );
       return;
     }
     onConcluir({
@@ -387,14 +405,17 @@ export default function DPModal({ visible, onClose, onConcluir, obra }) {
           </View>
 
           <TouchableOpacity
-            style={[s.concluirBtn, justificativaPendente && s.concluirBtnDisabled]}
+            style={[s.concluirBtn, !dpCompleto && s.concluirBtnDisabled]}
             onPress={handleConcluir}
-            disabled={justificativaPendente}
+            disabled={!dpCompleto}
           >
             <Text style={s.concluirText}>
-              {justificativaPendente ? 'Justifique o atraso para concluir' : 'Concluir DP'}
+              {dpCompleto ? 'Concluir DP' : `Responda tudo para concluir (${pendenciasDP.length})`}
             </Text>
           </TouchableOpacity>
+          {!dpCompleto && (
+            <Text style={s.pendenciaHint}>Pendente: {pendenciasDP[0]}</Text>
+          )}
         </ScrollView>
       </SafeAreaView>
     </Modal>
@@ -467,6 +488,7 @@ const s = StyleSheet.create({
   concluirBtn: { backgroundColor: '#16A34A', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
   concluirBtnDisabled: { backgroundColor: '#D1D5DB' },
   concluirText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
+  pendenciaHint: { textAlign: 'center', color: '#9CA3AF', fontSize: 12, marginTop: 6 },
   atrasoTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
   atrasoTag: { backgroundColor: '#FEE2E2', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
   atrasoTagText: { fontSize: 12, fontWeight: '700', color: '#B91C1C' },

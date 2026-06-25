@@ -5,7 +5,9 @@ import {
   Modal, TextInput,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import DPModal from '../components/DPModal';
+import PDFViewerModal from '../components/PDFViewerModal';
 import { useTheme } from '../context/ThemeContext';
 
 // Mesma lista de restrições da tela de parceiros (TrajetoScreen)
@@ -98,13 +100,48 @@ export default function QuestionarioInternoScreen({ route, navigation }) {
   const [restricaoPickerIdx, setRestricaoPickerIdx] = useState(null);
   const [fotos, setFotos] = useState([null, null, null]);
 
+  // Projeto PDF (para o EDP abrir e fazer marcações), igual ao fluxo do parceiro
+  const [projeto, setProjeto] = useState(route?.params?.projeto ?? null);
+  const [projetoAnnotations, setProjetoAnnotations] = useState(null);
+  const [showPdfViewer, setShowPdfViewer] = useState(false);
+
+  function abrirProjeto() {
+    if (!projeto) return;
+    setShowPdfViewer(true);
+  }
+
+  async function substituirProjeto() {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: 'application/pdf',
+      copyToCacheDirectory: true,
+    });
+    if (!result.canceled && result.assets?.length > 0) {
+      setProjeto(result.assets[0]);
+    }
+  }
+
   async function tirarFoto(index) {
-    if (Platform.OS !== 'web') {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permissão necessária', 'Autorize o acesso à câmera.');
-        return;
-      }
+    // No navegador (inclusive celular), launchCameraAsync não é confiável.
+    // Usa um <input> com capture, que abre a câmera direto no celular.
+    if (Platform.OS === 'web') {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.capture = 'environment';
+      input.onchange = e => {
+        const file = e.target.files?.[0];
+        if (file) {
+          const url = URL.createObjectURL(file);
+          setFotos(prev => prev.map((f, i) => i === index ? url : f));
+        }
+      };
+      input.click();
+      return;
+    }
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permissão necessária', 'Autorize o acesso à câmera.');
+      return;
     }
     const result = await ImagePicker.launchCameraAsync({ quality: 0.7 });
     if (!result.canceled && result.assets?.length > 0) {
@@ -121,7 +158,7 @@ export default function QuestionarioInternoScreen({ route, navigation }) {
       }
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.7,
     });
     if (!result.canceled && result.assets?.length > 0) {
@@ -133,13 +170,42 @@ export default function QuestionarioInternoScreen({ route, navigation }) {
     setFotos(prev => prev.map((f, i) => i === index ? null : f));
   }
 
-  const todosChecklistsFeitos = CHECKLISTS.every(c => checklistsFeitos[c.id] || checklistsNA[c.id]);
-  const todasFotos = fotos[0] !== null && fotos[1] !== null;
-  const podeEnviar = todosChecklistsFeitos && todasFotos;
+  // Lista de campos ainda em branco — o questionário só envia quando vazia
+  function camposFaltando() {
+    const faltas = [];
+    pontosExecucao.forEach(p => {
+      const ref = p.ov ? `${p.ponto} (OV ${p.ov})` : p.ponto;
+      if (!p.executado) {
+        faltas.push(`Informe se o ponto ${ref} foi executado`);
+        return;
+      }
+      if (p.executado === 'Parcial' || p.executado === 'Não') {
+        if (!p.responsabilidade) faltas.push(`Selecione a responsabilidade do ponto ${ref}`);
+        if (!p.restricao) faltas.push(`Selecione a restrição do ponto ${ref}`);
+        if (!p.observacao?.trim()) faltas.push(`Preencha a observação do ponto ${ref}`);
+      }
+    });
+    CHECKLISTS.forEach(c => {
+      if (!checklistsFeitos[c.id] && !checklistsNA[c.id]) faltas.push(`Conclua o checklist ${c.nome} (ou marque N/A)`);
+    });
+    if (!alteracaoExecucao) faltas.push('Responda se houve alterações na execução');
+    if (alteracaoExecucao === 'Sim' && !justificativaAlteracao.trim()) faltas.push('Justifique as alterações na execução');
+    if (!observacoesGerais.trim()) faltas.push('Preencha as observações gerais');
+    if (!fotos[0]) faltas.push('Adicione a foto "Visão geral da obra"');
+    if (!fotos[1]) faltas.push('Adicione a foto "Visão com equipamentos instalados"');
+    return faltas;
+  }
+
+  const faltas = camposFaltando();
+  const podeEnviar = faltas.length === 0;
 
   function handleEnviar() {
-    if (!podeEnviar) {
-      Alert.alert('Atenção', 'Complete o checklist DP e as 2 fotos obrigatórias do AS BUILD para enviar.');
+    const pendentes = camposFaltando();
+    if (pendentes.length > 0) {
+      Alert.alert(
+        `Faltam ${pendentes.length} resposta${pendentes.length > 1 ? 's' : ''}`,
+        pendentes.slice(0, 6).join('\n') + (pendentes.length > 6 ? '\n…' : '')
+      );
       return;
     }
     Alert.alert('Questionário enviado', 'O questionário foi registrado com sucesso.');
@@ -407,6 +473,35 @@ export default function QuestionarioInternoScreen({ route, navigation }) {
             );
           })}
 
+          {/* ── PROJETO PDF ── abrir e fazer marcações */}
+          <View style={[styles.projetoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.projetoInfo}>
+              <Text style={[styles.projetoIcon, { color: colors.textMuted }]}>PDF</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.projetoTitulo, { color: colors.heading }]}>Projeto (PDF)</Text>
+                <Text style={[styles.projetoNome, { color: colors.textSub }]} numberOfLines={1}>
+                  {projeto ? projeto.name : 'Nenhum arquivo importado'}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.projetoBtns}>
+              {projeto ? (
+                <>
+                  <TouchableOpacity style={[styles.projetoBtn, { backgroundColor: colors.inputBg, borderColor: colors.border }]} onPress={abrirProjeto}>
+                    <Text style={[styles.projetoBtnText, { color: colors.heading }]}>Abrir</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.projetoBtn, { backgroundColor: colors.inputBg, borderColor: colors.border }]} onPress={substituirProjeto}>
+                    <Text style={[styles.projetoBtnText, { color: colors.heading }]}>Substituir</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity style={[styles.projetoBtn, { backgroundColor: colors.inputBg, borderColor: colors.border, flex: 1 }]} onPress={substituirProjeto}>
+                  <Text style={[styles.projetoBtnText, { color: colors.heading }]}>+ Importar PDF</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
           <TouchableOpacity
             style={[styles.enviarBtn, !podeEnviar && styles.btnDisabled]}
             onPress={handleEnviar}
@@ -416,7 +511,7 @@ export default function QuestionarioInternoScreen({ route, navigation }) {
           </TouchableOpacity>
           {!podeEnviar && (
             <Text style={styles.hint}>
-              Complete o checklist DP e as 2 fotos obrigatórias do AS BUILD para enviar.
+              {faltas.length} pendência{faltas.length > 1 ? 's' : ''} — próxima: {faltas[0]}
             </Text>
           )}
         </View>
@@ -431,6 +526,17 @@ export default function QuestionarioInternoScreen({ route, navigation }) {
           setChecklistsFeitos(prev => ({ ...prev, 3: true }));
         }}
         obra={primeiraObra}
+      />
+
+      {/* Visualizador de PDF com marcações */}
+      <PDFViewerModal
+        visible={showPdfViewer}
+        uri={projeto?.uri}
+        nome={projeto?.name}
+        annotations={projetoAnnotations}
+        onClose={() => setShowPdfViewer(false)}
+        onSaveAnnotations={data => setProjetoAnnotations(data)}
+        onUpdate={novoPdf => setProjeto(novoPdf)}
       />
 
       {/* ── MODAL RESTRIÇÃO DE EXECUÇÃO ── */}
@@ -621,6 +727,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, height: 36, justifyContent: 'center', alignItems: 'center',
   },
   asBuildBtnText: { fontSize: 11, fontWeight: '700', color: '#475569' },
+
+  projetoCard: {
+    borderWidth: 1, borderRadius: 10, padding: 10,
+    marginTop: 10, marginBottom: 4, gap: 8,
+  },
+  projetoInfo: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  projetoIcon: { fontSize: 24 },
+  projetoTitulo: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase' },
+  projetoNome: { fontSize: 12, marginTop: 1 },
+  projetoBtns: { flexDirection: 'row', gap: 8 },
+  projetoBtn: {
+    flex: 1, borderWidth: 1, borderRadius: 8,
+    paddingVertical: 7, alignItems: 'center',
+  },
+  projetoBtnText: { fontSize: 12, fontWeight: '700' },
 
   enviarBtn: {
     backgroundColor: '#1E3A5F', borderRadius: 12, paddingVertical: 14,
